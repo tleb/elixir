@@ -164,8 +164,7 @@ class BsdDB:
     def get(self, key):
         key = autoBytes(key)
         p = self.db.get(key)
-        p = self.ctype(p)
-        return p
+        return None if p is None else self.ctype(p)
 
     def get_keys(self):
         return self.db.keys()
