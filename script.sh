@@ -119,20 +119,17 @@ list_blobs()
 {
     v=`echo $opt2 | version_rev`
 
-    if [ "$opt1" = '-p' ]; then
+    git ls-tree -r "$v" | if [ "$opt1" = '-p' ]; then
         # "path" option: return blob hash and full path
-        format='\1 \2'
+        sed -r '/^\S* commit .*$/d; s/^[0-9]+ blob //; s/\t/ /'
     elif [ "$opt1" = '-f' ]; then
         # "file" option: return blob hash and file name (without its path)
-        format='\1 \4'
+        sed -r "s/^\S* blob (\S*)\t(([^/]*\/)*(.*))$/\1 \4/; /^\S* commit .*$/d"
     else
         # default option: return only blob hash
-        format='\1'
         v=`echo $opt1 | version_rev`
+        sed -r '/^\S* commit .*$/d; s/^[0-9]+ blob //; s/\t.*$//'
     fi
-
-    git ls-tree -r "$v" |
-    sed -r "s/^\S* blob (\S*)\t(([^/]*\/)*(.*))$/$format/; /^\S* commit .*$/d"
 }
 
 untokenize()
