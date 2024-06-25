@@ -6,6 +6,7 @@ import collections
 import datetime
 import functools
 import multiprocessing
+import os
 import re
 import resource
 import tqdm
@@ -154,14 +155,14 @@ def compute_refs_for_idx(idx, defs_set):
 
     blob_family = lib.getFileFamily(blob_filename)
     if blob_family is None:
-        return []
+        return b'\n'
 
     # TODO: maybe do it in `./script.sh tokenize-file`?
     prefix = b"CONFIG_" if blob_family == "K" else b""
 
     even = True
     line_number = 1
-    idents = collections.OrderedDict()
+    refs = []
 
     for ident in lib.scriptLines("tokenize-file", "-b", blob_hash, blob_family):
         even = not even
@@ -169,29 +170,27 @@ def compute_refs_for_idx(idx, defs_set):
             ident = prefix + ident
 
             if (
+                # TODO: we could do a set that contains all defs in this
+                # version... Here we check in the DB, so we haven't improved
+                # our situation.
                 db.defs.exists(ident)
                 and (idx, line_number, ident) not in defs_set
                 and (blob_family != "M" or ident.startswith(b"CONFIG_"))
             ):
-                if ident in idents:
-                    idents[ident] += b"," + str(line_number).encode()
-                else:
-                    idents[ident] = str(line_number).encode()
+                refs.append(f'{ident}\t{idx}\t{line_number}\t{blob_family}'.encode())
         else:
             # TODO: this is so weird. Format is: first line gives line number
             # offset, second line gives ident, third line gives another offset,
             # fourth gives ident, etc.
             line_number += ident.count(b"\1")
 
-    return [
-        (ident, idx, line_numbers, blob_family)
-        for ident, line_numbers in idents.items()
-    ]
+    return b'\n'.join(refs) + b'\n'
 
 
 # new_idxes is all blobs that should be parsed for refs.
 # all_idxes is all blobs that contain interesting defs (ie blobs in the tag).
-def compute_refs(new_idxes, all_idxes, defs_set, new_defs_set, chunksize):
+# refs_aof_fd: file descriptor to the append-only file storing new references.
+def compute_refs(new_idxes, all_idxes, defs_set, new_defs_set, refs_aof_fd, chunksize):
     # The valid defs in this version are:
     #  - The valid defs in the previous version, minus those in blobs that are
     #    not in the current version.
@@ -203,35 +202,21 @@ def compute_refs(new_idxes, all_idxes, defs_set, new_defs_set, chunksize):
     fn = functools.partial(compute_refs_for_idx, defs_set=defs_set)
     new_refs = {}
 
+    # TODO: this is too memory expensive.
+
+    # TODO: we lose too much parallelism by doing tag-per-tag for small tags.
+    # Could we use a single pool and consume from it using multiple calls?
+    #
+    # We should probably compute all blobs then we could do a progress bar for
+    # each type (defs, refs, etc.) on the total.
+
     with multiprocessing.Pool() as pool:
         it = pool.imap_unordered(fn, new_idxes, chunksize=chunksize)
         it = tqdm.tqdm(it, desc="refs", total=len(new_idxes), leave=False)
-        for i, refs in enumerate(it):
-            for ident, idx, line_numbers, blob_family in refs:
-                if ident in new_refs:
-                    obj = new_refs[ident]
-                else:
-                    ref_list = db.refs.db.get(ident)
-                    obj = list(parse_refs(ref_list))
+        for refs in it:
+            refs_aof_fd.write(refs)
+            # TODO: update nb_new_refs
 
-                obj.append((idx, line_numbers, blob_family.encode()))
-                new_refs[ident] = obj
-                nb_new_refs += 1
-
-    for ident, refs in tqdm.tqdm(new_refs.items(), desc="refs->db", leave=False):
-        refs.sort()
-        db.refs.db.put(
-            ident,
-            b"\n".join(
-                [
-                    str(idx).encode() + b":" + lines + b":" + family
-                    for idx, lines, family in refs
-                ]
-            )
-            + b"\n",
-        )
-
-    db.refs.db.sync()
     return (nb_new_refs, defs_set)
 
 
@@ -312,82 +297,87 @@ defs_set = set()
 # theory have new tags that are not at the end. This is the issue with complex
 # state: it needs to be kept valid whatever happens...
 
-for tag in tqdm.tqdm(new_tags, desc="tags", leave=False):
-    t1 = datetime.datetime.now()
 
-    # TODO: extract this part into its function
 
-    vers_buffer = []
-    all_idxes = set()
-    new_idxes = set()
+with open(f'/tmp/elixir-update-{os.getpid()}-refs.txt', 'wb') as refs_aof_fd:
+    for tag in tqdm.tqdm(new_tags, desc="tags", leave=False):
+        t1 = datetime.datetime.now()
 
-    next_free_idx = db.vars.get("numBlobs")
-    if next_free_idx is None:
-        next_free_idx = 0
+        # TODO: extract this part into its function
 
-    blobs_it = lib.scriptLines("list-blobs", "-p", tag)
-    blobs_it = tqdm.tqdm(blobs_it, desc="blobs", leave=False)
-    for line in blobs_it:
-        blob_hash, blob_filepath = line.split(b" ", maxsplit=1)
+        vers_buffer = []
+        all_idxes = set()
+        new_idxes = set()
 
-        idx = db.blob.get(blob_hash)
-        if idx is None:
-            idx = next_free_idx
-            new_idxes.add(idx)
-            next_free_idx += 1
+        next_free_idx = db.vars.get("numBlobs")
+        if next_free_idx is None:
+            next_free_idx = 0
 
-            db.blob.put(blob_hash, idx)  # Map blob hash to idx.
-            db.hash.put(idx, blob_hash)  # Map idx to blob hash.
-            blob_filename = blob_filepath[blob_filepath.rfind(b"/") + 1 :]
-            db.file.put(idx, blob_filename)  # Map idx to filename.
+        blobs_it = lib.scriptLines("list-blobs", "-p", tag)
+        blobs_it = tqdm.tqdm(blobs_it, desc="blobs", leave=False)
+        for line in blobs_it:
+            blob_hash, blob_filepath = line.split(b" ", maxsplit=1)
 
-        all_idxes.add(idx)
-        vers_buffer.append((idx, blob_filepath))
+            idx = db.blob.get(blob_hash)
+            if idx is None:
+                idx = next_free_idx
+                new_idxes.add(idx)
+                next_free_idx += 1
 
-    vers_buffer.sort()
-    value = b"\n".join(
-        [str(idx).encode() + b" " + blob_filepath for idx, blob_filepath in vers_buffer]
-    )
-    value += b"\n"
-    db.vers.put(tag, value)
+                db.blob.put(blob_hash, idx)  # Map blob hash to idx.
+                db.hash.put(idx, blob_hash)  # Map idx to blob hash.
+                blob_filename = blob_filepath[blob_filepath.rfind(b"/") + 1 :]
+                db.file.put(idx, blob_filename)  # Map idx to filename.
 
-    db.vars.put("numBlobs", next_free_idx)
+            all_idxes.add(idx)
+            vers_buffer.append((idx, blob_filepath))
 
-    db.vars.db.sync()
-    db.blob.db.sync()
-    db.hash.db.sync()
-    db.file.db.sync()
-    db.vers.db.sync()
+        vers_buffer.sort()
+        value = b"\n".join(
+            [str(idx).encode() + b" " + blob_filepath for idx, blob_filepath in vers_buffer]
+        )
+        value += b"\n"
+        db.vers.put(tag, value)
 
-    t2 = datetime.datetime.now()
+        db.vars.put("numBlobs", next_free_idx)
 
-    # For small batches, avoid using too big of a chunksize else most cores will
-    # be starved.
-    chunksize = int(len(new_idxes) / multiprocessing.cpu_count())
-    chunksize = min(max(1, chunksize), 400)
+        db.vars.db.sync()
+        db.blob.db.sync()
+        db.hash.db.sync()
+        db.file.db.sync()
+        db.vers.db.sync()
 
-    nb_new_defs, new_defs_set = compute_defs(new_idxes, chunksize)
+        t2 = datetime.datetime.now()
 
-    t3 = datetime.datetime.now()
+        # For small batches, avoid using too big of a chunksize else most cores will
+        # be starved.
+        chunksize = int(len(new_idxes) / multiprocessing.cpu_count())
+        chunksize = min(max(1, chunksize), 400)
 
-    nb_new_refs, defs_set = compute_refs(new_idxes, all_idxes, defs_set, new_defs_set, chunksize)
+        nb_new_defs, new_defs_set = compute_defs(new_idxes, chunksize)
 
-    t4 = datetime.datetime.now()
+        t3 = datetime.datetime.now()
 
-    nb_new_docs = compute_docs(new_idxes, chunksize)
+        nb_new_refs, defs_set = compute_refs(new_idxes, all_idxes, defs_set, new_defs_set, refs_aof_fd, chunksize)
 
-    t5 = datetime.datetime.now()
+        t4 = datetime.datetime.now()
 
-    blobs_duration = (t2 - t1).total_seconds()
-    defs_duration = (t3 - t2).total_seconds()
-    refs_duration = (t4 - t3).total_seconds()
-    docs_duration = (t5 - t4).total_seconds()
-    total_duration = (t5 - t1).total_seconds()
+        nb_new_docs = compute_docs(new_idxes, chunksize)
 
-    nb = len(new_idxes)
-    stats = f"{nb:5} blobs, {nb_new_defs:6} defs, {nb_new_refs:7} refs, {nb_new_docs:6} docs"
-    timings = f"{nb / defs_duration:4.0f}, {nb / refs_duration:4.0f}, {nb / docs_duration:4.0f} blobs/s"
-    tqdm.tqdm.write(f"{tag.decode()}:\t{stats}, in {total_duration:6.2f}s ({timings})")
+        t5 = datetime.datetime.now()
+
+        blobs_duration = (t2 - t1).total_seconds()
+        defs_duration = (t3 - t2).total_seconds()
+        refs_duration = (t4 - t3).total_seconds()
+        docs_duration = (t5 - t4).total_seconds()
+        total_duration = (t5 - t1).total_seconds()
+
+        nb = len(new_idxes)
+        stats = f"{nb:5} blobs, {nb_new_defs:6} defs, {nb_new_refs:7} refs, {nb_new_docs:6} docs"
+        timings = f"{nb / defs_duration:4.0f}, {nb / refs_duration:4.0f}, {nb / docs_duration:4.0f} blobs/s"
+        tqdm.tqdm.write(f"{tag.decode()}:\t{stats}, in {total_duration:6.2f}s ({timings})")
+
+# TODO: put all refs into the db
 
 t6 = datetime.datetime.now()
 duration = (t6 - t0).total_seconds()
@@ -407,3 +397,17 @@ print(f"max rss: {max_rss_kb / (1000*1000):.3f} GB")
 # This means it will be done in single-core as well, which is even slow. Maybe
 # just retrieve from database when its time. This means we keep listing of
 # blobs parallel.
+
+# TODO: check max rss, I'm seeing >4GB when indexing a few Linux tags. Is it
+# linked with using the definitions.db from prod?
+
+# TODO: we could simplify the logic by writing to a file all refs. That means we
+# are not reloading all the time, we are not merging all the time the same
+# thing, etc.
+#
+# Then run sort on the file to aggregate keys together. Then do the merging.
+# That way we merge once and not thousand of times (at each tag). And we don't
+# have to grab from DB and parse each old ref.
+#
+# The same logic can be achieved for defs *if* we do all defs then all refs
+# (and docs).
