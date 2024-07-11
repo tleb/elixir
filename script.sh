@@ -53,7 +53,7 @@ get_tags()
 
 list_tags()
 {
-    echo "$tags"
+    echo "$tags" # | tail -n1000
 }
 
 list_tags_h()

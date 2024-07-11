@@ -1,0 +1,420 @@
+Some data about indexing. We index a single version of musl.
+
+
+⟩ git diff script.sh
+diff --git a/script.sh b/script.sh
+index 011e095..5843cf9 100755
+--- a/script.sh
++++ b/script.sh
+@@ -53,7 +53,7 @@ get_tags()
+
+ list_tags()
+ {
+-    echo "$tags"
++    echo "$tags" | head -n1
+ }
+
+ list_tags_h()
+
+
+To run update:
+
+⟩ mkdir /tmp/lxr-data
+⟩ rm /tmp/lxr-data/*
+⟩ LXR_REPO_DIR=/home/tleb/prog/public/musl LXR_DATA_DIR=/tmp/lxr-data \
+    strace -s 500 -tt -T -f -e trace=fork,vfork,clone,execve -e signal=none -o strace.txt \
+    python3 -u ./update.py
+
+Time spent:
+
+⟩ tail -n1 strace.txt
+1579368 11:23:32.374527 +++ exited with 0 +++
+⟩ head -n1 strace.txt
+1579368 11:21:44.278599 execve("/usr/bin/python3", ["python3", "-u", "./update.py"], 0x7ffe5020d838 /* 45 vars */) = 0 <0.000453>
+⟩ datediff 11:23:32.374527 11:21:44.278599
+-108s
+
+⟩ # Processes spawned:
+⟩ grep 'execve(' strace.txt | cut -d'"' -f2 | sort | uniq -c | sort -n
+      1 /usr/bin/python3
+      3 /usr/bin/cat
+      4 /usr/bin/sed
+    996 /home/tleb/.bin/perl
+    996 /home/tleb/go/bin/perl
+    996 /home/tleb/intragit/bin/perl
+    996 /home/tleb/prog/public/elixir/find-file-doc-comments.pl
+    996 /usr/bin/rmdir
+    996 /usr/local/bin/perl
+    996 /usr/local/sbin/perl
+    997 /usr/bin/tr
+    998 /usr/bin/head
+   1947 /usr/bin/sort
+   1992 /usr/bin/awk
+   1992 /usr/bin/ctags
+   1992 /usr/bin/grep
+   1992 /usr/bin/mktemp
+   1992 /usr/bin/rm
+   2942 /bin/sh
+   2992 /usr/bin/git
+   2993 /home/tleb/prog/public/elixir/script.sh
+   2993 /usr/bin/basename
+   2993 /usr/bin/realpath
+   3985 /usr/bin/perl
+   5986 /usr/bin/dirname
+
+⟩ # script.sh invocations:
+⟩ grep 'script.sh",' strace.txt | cut -d'[' -f2- | cut -d',' -f2 | sort | uniq -c | sort -n
+      1  "dts-comp"]
+      1  "list-tags"]
+      2  "list-blobs"
+    996  "parse-defs"
+    996  "parse-docs"
+    997  "tokenize-file"
+
+dts-comp       0.022s
+list-tags      0.035s
+list-blobs     0.047s/0.030s
+parse-defs    ~0.076s        =>  996*0.076s =  75.696s
+parse-docs    ~0.112s        =>  996*0.112s = 111.552s
+tokenize-file ~0.036s        =>  997*0.036s =  35.892s
+perl          ~0.047s        => 8965*0.047s = 421.355s
+
+Command for those averages looks like this:
+
+⟩ for line in (grep parse-defs strace.txt)
+      set start_time (echo $line | cut -d' ' -f2 | cut -d':' -f3)
+      set pid (echo $line | cut -d' ' -f1)
+      set end_time (grep $pid strace.txt | tail -n1 | cut -d' ' -f2 | cut -d':' -f3)
+      echo $end_time $start_time '- p' | dc
+  end > times-parse-defs.txt
+⟩ # Cleanup manually, look for regex '^[^\.]', because we have overflows
+⟩ awk '{sum += $0; cnt += 1} END {print sum / cnt}' times-parse-defs.txt
+
+
+Assuming 5ms per process, we already have 3m49s spent. We spawn 45766 processes
+to index musl v0.5.0. It is 1021 files and 35668 LoC. It takes 108s. This is
+~45 processes per file indexed, it is crazy!
+
+Indexing first 5 versions takes 121s. It spawns 61783 processes.
+
+⟩ grep 'execve(' strace.txt | cut -d'"' -f2 | sort | uniq -c | sort -n
+      1 /usr/bin/python3
+     11 /usr/bin/cat
+     12 /usr/bin/sed
+   1343 /home/tleb/.bin/perl
+   1343 /home/tleb/go/bin/perl
+   1343 /home/tleb/intragit/bin/perl
+   1343 /home/tleb/prog/public/elixir/find-file-doc-comments.pl
+   1343 /usr/bin/rmdir
+   1343 /usr/local/bin/perl
+   1343 /usr/local/sbin/perl
+   1347 /usr/bin/tr
+   1348 /usr/bin/head
+   2623 /usr/bin/sort
+   2686 /usr/bin/awk
+   2686 /usr/bin/ctags
+   2686 /usr/bin/grep
+   2686 /usr/bin/mktemp
+   2686 /usr/bin/rm
+   3965 /bin/sh
+   4044 /usr/bin/git
+   4045 /home/tleb/prog/public/elixir/script.sh
+   4045 /usr/bin/basename
+   4045 /usr/bin/realpath
+   5376 /usr/bin/perl
+   8090 /usr/bin/dirname
+
+Questions remaining:
+ - how long do each section take? Doc, etc?
+ - How big is the parent process overhead reading stdouts from processes?
+ - How long is the sum of each process duration, per executable?
+ - How slow is all this perl interpreter spawning?
+ - Does the open().read() in Python leak file descriptors? Is it expensive?
+ - We rerun ctags for grabbing code comments. How expensive is this?
+ - When we run perl stuff we do loads of execve with wrong perl locations. Is
+   this expensive?
+
+
+Bug: update.py prints parent dir of LXR_DATA_DIR for information. But that makes
+no sense with for example: LXR_DATA_DIR=/tmp/lxr-data
+
+Bug: why is list-blobs called twice with a single tag?
+
+Maybe the solution is to allow calling ./script.sh with multiple tags. So
+instead of one call per blob we get a single one with list of blobs in stdin.
+
+Maybe the perl invocations can be replaced by giving macro implementations to
+ctags -I. I don't see a wallclock gain by removing perl calls in parse_defs_C,
+only a small usr time gain of ~3s.
+
+
+musl v0.5.0 indexing
+ - 46.39s, 10 cpu
+ - 46.12s, no parse_defs_C ctags, no parse_defs_C perl
+ - 47.09s, no tokenize-file
+ - 46.50s,  5 cpu
+ - 46.15s, 40 cpu
+
+
+
+
+         1161142 function calls (1146920 primitive calls) in 46.462 seconds
+
+   Ordered by: cumulative time
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+ 2993/224    0.031    0.000  101.435    0.453 lib.py:25(script)
+ 2992/223    0.019    0.000  101.429    0.455 lib.py:39(scriptLines)
+       12    0.000    0.000   83.937    6.995 threading.py:1115(join)
+       12    0.000    0.000   83.937    6.995 threading.py:1153(_wait_for_tstate_lock)
+    93/38    0.001    0.000   56.705    1.492 {method 'acquire' of '_thread.lock' objects}
+12497/12492    0.024    0.000   49.668    0.004 data.py:164(get)
+12497/12492    0.051    0.000   49.618    0.004 {method 'get' of 'DB' objects}
+     13/1    0.000    0.000   46.462   46.462 {built-in method builtins.exec}
+        1    0.000    0.000   46.462   46.462 update.py:1(<module>)
+     12/2    0.000    0.000   46.431   23.216 threading.py:1016(_bootstrap)
+     12/2    0.000    0.000   46.431   23.216 threading.py:1056(_bootstrap_inner)
+      2/1    0.000    0.000   46.388   46.388 update.py:350(run)
+        1    0.002    0.002   46.388   46.388 update.py:373(update_doc_comments)
+ 2993/224    0.224    0.000   38.141    0.170 subprocess.py:506(run)
+     14/8    0.000    0.000   25.823    3.228 threading.py:323(wait)
+     17/7    0.000    0.000   25.780    3.683 threading.py:637(wait)
+ 2993/261    0.029    0.000    8.837    0.034 subprocess.py:1165(communicate)
+ 3014/284   43.876    0.015    8.811    0.031 {method 'read' of '_io.BufferedReader' objects}
+      4/1    0.000    0.000    4.831    4.831 update.py:266(run)
+        1    0.046    0.046    4.831    4.831 update.py:290(update_references)
+      4/1    0.000    0.000    3.447    3.447 update.py:198(run)
+        1    0.005    0.005    3.447    3.447 update.py:224(update_definitions)
+2993/2958    0.033    0.000    1.247    0.000 subprocess.py:807(__init__)
+2993/2962    0.067    0.000    1.049    0.000 subprocess.py:1791(_execute_child)
+
+
+not doing any parse-defs doesn't make anything faster
+
+but commenting parse_docs makes it 46s -> 22s
+
+
+
+# It iterates over all new versions.
+# It allocates blob indexes for each blob in this version.
+# It also updates the number of blobs in the database.
+
+# Each tag has 4 events attached to it: (1) tag and its blobs are known,
+# (2) definitions have been parsed, (3) compatible parsed
+
+threads_list.append(UpdateIds(tag_buf))
+
+
+threads_list.append(UpdateVersions(tag_buf))
+
+# Define defs threads
+for i in range(num_th_defs):
+    threads_list.append(UpdateDefs(i, num_th_defs))
+# Define refs threads
+for i in range(num_th_refs):
+    threads_list.append(UpdateRefs(i, num_th_refs))
+# Define docs threads
+for i in range(num_th_docs):
+    threads_list.append(UpdateDocs(i, num_th_docs))
+# Define comps threads
+for i in range(num_th_comps):
+    threads_list.append(UpdateComps(i, num_th_comps))
+# Define comps_docs threads
+for i in range(num_th_comps_docs):
+    threads_list.append(UpdateCompsDocs(i, num_th_comps_docs))
+
+
+
+ng:   17.62s, 10 musl versions
+old:  54.35s, 10 musl versions
+old:  86.60s, 30 musl versions
+ng:  130.12s, 30 musl versions
+
+
+ng, 10 musl tags, chunksize=1, 18s, usr_time 78s
+ng, 10 musl tags, chunksize=10, 5.7s, usr_time 52s
+ng, 10 musl tags, chunksize=50, 4.49s, usr_time 49s
+
+
+imap_unordered, chunksize= 40, 47.17s for refs
+imap_unordered, chunksize=400, 11.75s for refs
+imap_unordered, chunksize=200, 17.31s for refs
+map,            chunksize=400, 14.59s for refs
+
+
+
+tags: 77 new found, in 0.01s
+blobs: 9856 new found, in 0.51s
+defs: 280263 new found, in 14.86s
+refs: 147392 new found, in 12.81s
+
+________________________________________________________
+Executed in   28.32 secs    fish           external
+   usr time  290.27 secs  785.00 micros  290.27 secs
+   sys time  134.25 secs  187.00 micros  134.25 secs
+
+
+
+old: 241.79, usr=589.77s
+
+
+
+old to do musl: wall 231s, usr 577s, sys 212s
+ng  to do musl: wall  26s, usr 272s, sys 118s
+
+
+⟩ # first tag from Linux:
+⟩ rm /tmp/lxr-data/* ; time LXR_REPO_DIR=/home/tleb/prog/public/linux LXR_DATA_DIR=/tmp/lxr-data \
+          python -u update-ng.py
+tags: 1 new found, in 0.04s
+blobs: 16930 new found, in 0.32s (3.12 tags/s)
+defs: 730758 new found, in 40.02s (423.08 blobs/s)
+refs: 1131147 new found, in 94.92s (178.36 blobs/s)
+________________________________________________________
+Executed in  135.60 secs    fish           external
+   usr time  630.23 secs    0.00 micros  630.23 secs
+   sys time  262.69 secs  885.00 micros  262.68 secs
+
+
+
+
+
+
+solution to know how far we are from optimal perf:
+grab list of blobs and run ./script.sh commands on those using parallel/xargs
+
+with open('/tmp/foo', 'w') as f:
+    for hash in db_b.blob.get_keys():
+        idx = db_b.blob.get(hash)
+        filename = db_b.file.get(idx)
+        family = lib.getFileFamily(filename)
+        if family in [None, 'M']: continue
+        print(hash.decode(), filename, family)
+        f.write('\t'.join(('parse-defs', hash.decode(), filename, family)) + '\n')
+
+⟩ cat /tmp/foo | LXR_REPO_DIR=/home/tleb/prog/public/musl LXR_DATA_DIR=/tmp/lxr-data
+    command time parallel --colsep '\t' ./script.sh >/dev/null
+213.53user 120.86system 0:28.60elapsed 1169%CPU (0avgtext+0avgdata 20020maxresident)k
+0inputs+0outputs (1818major+48405459minor)pagefaults 0swaps
+
+whereas update-ng.py reports:
+tags: 77 new found, in 0.01s
+blobs: 9856 new found, in 0.52s (148.06 tags/s)
+defs: 280263 new found, in 14.16s (695.91 blobs/s)
+
+Why is wallclock 14s vs 28.6s?
+
+
+
+TODO: make "<enter>" select the first tag when filtering
+
+
+
+indexing of full barebox:
+
+⟩ rm /tmp/lxr-data/* ; time LXR_REPO_DIR=/home/tleb/prog/public/barebox LXR_DATA_DIR=/tmp/lxr-data \
+          command time -v python -u update-ng.py
+tags: 209 new found, in 0.01s
+blobs: 103389 new found, in 6.77s (30.85 tags/s)
+defs: 2869111 new found, in 104.32s (991.08 blobs/s)
+refs: 4695538 new found, in 653.65s (158.17 blobs/s)
+docs: 26355 new found, in 216.80s
+...
+    Maximum resident set size (kbytes): 1918316
+________________________________________________________
+Executed in   16.38 mins    fish           external
+   usr time  101.63 mins  687.00 micros  101.63 mins
+   sys time   33.59 mins   84.00 micros   33.59 mins
+
+
+
+
+indexing of full barbox, done one tag after the other:
+
+
+
+
+
+some data about parsing the last five barebox tags, with 5 cpus:
+
+task          num_call  cumtime_ms
+list-blobs         5       1100
+list-tags          1         12
+tokenize-file  13472     142457
+parse-defs     13018     215262
+parse-docs     13018     421878
+
+
+Example call that is slow:
+164 parse-docs  7f6fbd206ba608cba33da19b52c1a97d0d23610f    sfr_defs.h
+153 parse-docs  991300060096a2a0e64dad7fc7d0ebe000331590    iomux-mx6.h
+119 parse-docs  69f0abe1ba1a00d9c65990d7612412c3509b301c    pci_ids.h
+
+
+slowest parse-defs:
+35  parse-defs  04e2b7f12dfd901e01f9face2312c544b1afea23    designware_rockchip.c   C
+35  parse-defs  19bf71288111b1512bda9ae2a618daa27e71bc88    decompress.c    C
+35  parse-defs  1d94e09167324afac428e5460ac781bc58fa88cc    clk-mux.c   C
+35  parse-defs  30392d119253a588df53fa34e1454a2b6f4a06e5    omap4_usbbootfs.c   C
+35  parse-defs  6193a440cbab8de59b21de91a265274dd5283a3a    mfp-pxa27x.h    C
+35  parse-defs  9eef6d7f1392f694781e5ee5f35cc7c5069d0e3a    of.h    C
+35  parse-defs  ef2546490d65ba952cfd1095526471d1cd1b46ec    nand.h  C
+36  parse-defs  19c8f08ba87d40f35aaa40e6e0e2d34bb26fdbe8    math.c  C
+36  parse-defs  d15d59f6350e154be9ce419c79b66791f25d3641    regmap-spi.c    C
+36  parse-defs  df98dc2a67b8587b1e6c6f8348748f781e6c5f79    tegra124-venice2.dts    D
+37  parse-defs  7dd9ba2a7ac8ec236ae874ed23ca7027b72ea6ee    basename.c  C
+38  parse-defs  19ac7b36f608eafdf1b25bbabeea4296ddffe8d3    qcom,ids.h  C
+38  parse-defs  93abce33af4db7ff28f0c4d2bd3b53256183c187    board.c C
+38  parse-defs  c0192881906b8388618410c867acbb4a8efcd563    nand_micron.c   C
+43  parse-defs  93e176c2d6a9d219512687755dba3896e3b3af17    Kconfig K
+
+
+Ideas to improve ./script.sh parse-defs:
+ ctags -u to avoid sorting idents
+script_dir="$(dirname `realpath "$0"`)"
+avoid project=$(basename `dirname $LXR_REPO_DIR`)
+
+maybe we can avoid doing expensive parse-docs if we can grep for an easy thing
+and see it isn't present
+
+
+barebox first five tags has 49 blobs with docs versus 1101 blobs without
+let's try to write an easy test to ignore most of them
+
+(1) it requires a def in the blob
+(2) it only works on "ctags -x --c-kinds=+p-m --language-force=C" files
+
+
+status=0 match
+we would avoid 883/1101 files by grepping for '/**'
+
+
+84fda76bcd391eb3f4dcf575b60247d947e96763
+
+
+before: 26s wallclock, 209s usr, 92s sys
+after:  22s wallclock, 147s usr, 73s sys
+
+
+
+
+
+TODO: remove the concept of family? What is it used for?
+
+
+IDEA: tokenize doc files and mark matches as documentation? Eg if clk_get_rate
+is mentioned in Documentation/**/*.rst then it could be considered a docs
+entry. The issue is that it will most probably give way too many false
+positives.
+
+
+
+$ docker run -it --rm -v ~/prog/public/elixir:/code -v ~/elixir-data/:/data ubuntu:22.04
+
+
+export LXR_REPO_DIR=/data/linux/repo LXR_DATA_DIR=/data/linux/data
+apt update
+apt upgrade -y
+apt install -y time universal-ctags git python3 python3-tqdm python3-bsddb3
+git config --global --add safe.directory /data/linux/repo
+sed -i 's/^dts_comp_support=1$/dts_comp_support=0/'  /code/projects/linux.sh

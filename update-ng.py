@@ -7,6 +7,7 @@ import datetime
 import functools
 import multiprocessing
 import os
+import sys
 import re
 import resource
 import tqdm
@@ -152,17 +153,21 @@ def compute_defs(new_idxes, chunksize):
 def compute_refs_for_idx(idx, defs_set):
     blob_hash = db.hash.get(idx)
     blob_filename = db.file.get(idx)
+    idx_bytes = str(idx).encode()
 
     blob_family = lib.getFileFamily(blob_filename)
     if blob_family is None:
-        return b'\n'
+        return (b'\n', 0)
 
     # TODO: maybe do it in `./script.sh tokenize-file`?
     prefix = b"CONFIG_" if blob_family == "K" else b""
 
+    blob_family_bytes = blob_family.encode()
+
+    nb_new_refs = 0
     even = True
     line_number = 1
-    refs = []
+    refs = bytearray()
 
     for ident in lib.scriptLines("tokenize-file", "-b", blob_hash, blob_family):
         even = not even
@@ -177,14 +182,22 @@ def compute_refs_for_idx(idx, defs_set):
                 and (idx, line_number, ident) not in defs_set
                 and (blob_family != "M" or ident.startswith(b"CONFIG_"))
             ):
-                refs.append(f'{ident}\t{idx}\t{line_number}\t{blob_family}'.encode())
+                refs += ident
+                refs += b"\t"
+                refs += idx_bytes
+                refs += b"\t"
+                refs += str(line_number).encode()
+                refs += b"\t"
+                refs += blob_family_bytes
+                refs += b"\n"
+                nb_new_refs += 1
         else:
             # TODO: this is so weird. Format is: first line gives line number
             # offset, second line gives ident, third line gives another offset,
             # fourth gives ident, etc.
             line_number += ident.count(b"\1")
 
-    return b'\n'.join(refs) + b'\n'
+    return (bytes(refs), nb_new_refs)
 
 
 # new_idxes is all blobs that should be parsed for refs.
@@ -210,12 +223,19 @@ def compute_refs(new_idxes, all_idxes, defs_set, new_defs_set, refs_aof_fd, chun
     # We should probably compute all blobs then we could do a progress bar for
     # each type (defs, refs, etc.) on the total.
 
+    # Maybe it is because they must each access to defs_set?
+
+    tqdm.tqdm.write(f"size defs_set: {sys.getsizeof(defs_set) // (1000*1000)} MB")
+    # 268MB is a lot if this gets copied to each thread
+
+    chunksize = 10
+
     with multiprocessing.Pool() as pool:
         it = pool.imap_unordered(fn, new_idxes, chunksize=chunksize)
         it = tqdm.tqdm(it, desc="refs", total=len(new_idxes), leave=False)
-        for refs in it:
+        for refs, nb_new in it:
             refs_aof_fd.write(refs)
-            # TODO: update nb_new_refs
+            nb_new_refs += nb_new
 
     return (nb_new_refs, defs_set)
 
@@ -296,6 +316,28 @@ defs_set = set()
 # TODO: wait! this doesn't work well as we only deal with new tags. We could in
 # theory have new tags that are not at the end. This is the issue with complex
 # state: it needs to be kept valid whatever happens...
+
+def compute_blobs_for_tag(tag):
+    res = bytearray()
+
+    for line in lib.scriptLines("list-blobs", "-p", tag):
+        blob_hash, blob_filepath = line.split(b" ", maxsplit=1)
+        res += tag + b"\t" + blob_hash + b"\t" + blob_filepath + b"\n"
+
+    return bytes(res)
+
+
+def compute_blobs(new_tags):
+    with multiprocessing.Pool() as pool:
+        it = pool.imap(compute_blobs_for_tag, new_tags)
+        it = tqdm.tqdm(it, desc="blobs", total=len(new_tags), leave=False)
+        for blobs in it:
+            # print(blobs.count(b'\n'))
+            pass
+
+
+compute_blobs(new_tags)
+exit(0)
 
 
 

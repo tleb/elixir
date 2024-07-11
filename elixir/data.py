@@ -148,6 +148,7 @@ class BsdDB:
     def __init__(self, filename, readonly, contentType, shared=False):
         self.filename = filename
         self.db = berkeleydb.db.DB()
+        self.db.set_cachesize(0, 200000000) # TODO: needed?
         flags = berkeleydb.db.DB_THREAD if shared else 0
 
         if readonly:
