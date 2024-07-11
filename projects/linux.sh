@@ -1,7 +1,7 @@
 # Elixir definitions for Linux
 
 # Enable DT bindings compatible strings support
-dts_comp_support=1
+dts_comp_support=0
 
 get_tags()
 {

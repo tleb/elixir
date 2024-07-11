@@ -148,6 +148,7 @@ class BsdDB:
     def __init__(self, filename, readonly, contentType):
         self.filename = filename
         self.db = bsddb3.db.DB()
+        self.db.set_cachesize(0, 200000000) # TODO: needed?
         if readonly:
             self.db.open(filename, flags=bsddb3.db.DB_RDONLY)
         else:

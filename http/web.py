@@ -24,10 +24,12 @@ from urllib import parse
 realprint = print
 outputBuffer = StringIO()
 
+# Overriding the print() function is ugly.
 def print(arg, end='\n'):
     global outputBuffer
     outputBuffer.write(arg + end)
 
+# Put all imports at start.
 import cgitb
 import cgi
 import os
@@ -49,6 +51,8 @@ cgitb.enable(display=0, logdir=errdir, format='text')
 
 ident = ''
 status = 200
+
+# Regexp are not needed I think.
 
 url = os.environ.get('REQUEST_URI') or os.environ.get('SCRIPT_URL')
 # Split the URL into its components (project, version, cmd, arg)
@@ -106,9 +110,13 @@ if m:
                 ident = ''
             url = family + '/ident/' + ident
     else:
+        # Early return?
         status = 400
 else:
+    # Early return?
     status = 400
+
+# Replace all above "status = 30x" by "redirect(...); exit()"
 
 if status == 301:
     realprint('Status: 301 Moved Permanently')
@@ -131,6 +139,7 @@ for (dirpath, dirnames, filenames) in os.walk(basedir):
     break
 projects.sort()
 
+# Import at start?
 from query import Query
 
 q = Query(datadir, repodir)
@@ -143,6 +152,7 @@ else:
 
 ident = parse.unquote(ident)
 
+# Do we need this dict?
 data = {
     'baseurl': '/' + project + '/',
     'tag': tag,
@@ -152,6 +162,7 @@ data = {
     'projects': projects,
     'ident': ident,
     'family': search_family,
+    # Escaping?
     'breadcrumb': '<a class="project" href="'+version+'/source">/</a>'
 }
 
@@ -217,6 +228,8 @@ if mode == 'source':
     else:
         print('<div class="lxrerror"><h2>This file does not exist.</h2></div>')
         status = 404
+        # We are done here and below code will not trigger as type == ''. We
+        # could refactor to early check for type == ''.
 
     if type == 'tree':
         if path != '':
@@ -246,6 +259,8 @@ if mode == 'source':
                     if dir_name != '/':
                         dir_name += '/'
 
+                    # Wait we do not check to what the symlink points to. Is it
+                    # safe?
                     path2 = os.path.abspath(dir_name + rel_path)
 
                     name = name + ' -> ' + path2

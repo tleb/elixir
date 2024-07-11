@@ -1,7 +1,7 @@
 # Elixir definitions for Barebox
 
 # Enable DT bindings compatible strings support
-dts_comp_support=1
+dts_comp_support=0
 
 list_tags_h()
 {
