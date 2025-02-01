@@ -42,6 +42,10 @@ project_add_remote() {
 
 # $1 is the project path (parent of data/ and repo/).
 project_fetch() {
+    if test -n "$TLEB_NO_FETCH"; then
+        return
+    fi
+
     git="git -C $1/repo -c safe.directory=$1/repo"
 
     $git fetch --all --tags -j4
@@ -65,8 +69,12 @@ project_index() {
 
     elixir_sources="$(dirname "$(dirname "$0")")"
 
+    if test -z "$TLEB_UPDATE"; then
+        TLEB_UPDATE="update.py"
+    fi
+
     LXR_REPO_DIR=$1/repo LXR_DATA_DIR=$1/data \
-        python3 "$elixir_sources/update.py" $ELIXIR_THREADS
+        python3 "$elixir_sources/$TLEB_UPDATE" $ELIXIR_THREADS
 }
 
 # $1 is the Elixir root data path.
@@ -104,8 +112,10 @@ do_index() {
         # probably took a lot of time.
         project_fetch "$1"
         project_index "$1"
-        project_fetch "$1"
-        project_index "$1"
+
+        # TLEB: commented second indexing, we are benchmarking here
+        # project_fetch "$1"
+        # project_index "$1"
     else
         project_fetch "$1"
         project_index "$1"

@@ -48,7 +48,8 @@ get_tags()
     version_dir |
     sed 's/$/.0/' |
     sort -V |
-    sed 's/\.0$//'
+    sed 's/\.0$//' |
+    head -n10
 }
 
 list_tags()
@@ -162,7 +163,7 @@ parse_defs_C()
     git cat-file blob "$opt1" > "$full_path"
 
     # Use ctags to parse most of the defs
-    ctags -x --kinds-c=+p+x --extras='-{anonymous}' "$full_path" |
+    ctags -u -x --kinds-c=+p+x --extras='-{anonymous}' "$full_path" |
     grep -avE "^operator |CONFIG_" |
     awk '{print $1" "$2" "$3}'
 
@@ -179,7 +180,7 @@ parse_defs_K()
     tmp=`mktemp -d`
     full_path=$tmp/$opt2
     git cat-file blob "$opt1" > "$full_path"
-    ctags -x --language-force=kconfig --kinds-kconfig=c --extras-kconfig=-{configPrefixed} "$full_path" |
+    ctags -u -x --language-force=kconfig --kinds-kconfig=c --extras-kconfig=-{configPrefixed} "$full_path" |
     awk '{print "CONFIG_"$1" "$2" "$3}'
     rm "$full_path"
     rmdir $tmp
@@ -190,7 +191,7 @@ parse_defs_D()
     tmp=`mktemp -d`
     full_path=$tmp/$opt2
     git cat-file blob "$opt1" > "$full_path"
-    ctags -x --language-force=dts "$full_path" |
+    ctags -u -x --language-force=dts "$full_path" |
     awk '{print $1" "$2" "$3}'
     rm "$full_path"
     rmdir $tmp

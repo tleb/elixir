@@ -41,11 +41,11 @@ COPY --from=build /build/berkeleydb-*.whl /tmp/build/
 RUN python3 -m venv venv && \
     . ./venv/bin/activate && \
     pip install /tmp/build/berkeleydb-*.whl && \
-    pip install -r requirements.txt
+    pip install -r requirements.txt && \
+    pip install tqdm
 
 RUN mkdir -p /srv/elixir-data/
 
-COPY . /usr/local/elixir/
 COPY ./docker/000-default.conf /etc/apache2/sites-available/000-default.conf
 COPY ./docker/gitconfig /etc/gitconfig
 
@@ -59,5 +59,7 @@ ENV ELIXIR_VERSION=$ELIXIR_VERSION \
     ELIXIR_ROOT=/srv/elixir-data \
     PATH="/usr/local/elixir/utils:/usr/local/elixir/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
+
+COPY . /usr/local/elixir/
 
 ENTRYPOINT ["/usr/sbin/apache2ctl", "-D", "FOREGROUND"]

@@ -418,3 +418,50 @@ apt upgrade -y
 apt install -y time universal-ctags git python3 python3-tqdm python3-bsddb3
 git config --global --add safe.directory /data/linux/repo
 sed -i 's/^dts_comp_support=1$/dts_comp_support=0/'  /code/projects/linux.sh
+
+
+
+
+indexing of 10 musl versions, no fetching done
+
+29.99s for update.py
+6.81s for update-ng.py
+59.88s for update-franek.py
+
+
+
+
+~/prog/public/elixir · 16:46:54 · (master±)
+⟩ hyperfine --min-runs 3 --parameter-list update update.py,update-ng.py,update-franek.py \
+      --prepare 'sudo rm -rf data/musl/data/*' \
+      'docker run -e TLEB_UPDATE={update} -e TLEB_NO_FETCH=1 \
+  -v ./data/:/srv/elixir-data \
+  --entrypoint index elixir /srv/elixir-data musl'
+Benchmark 1: docker run -e TLEB_UPDATE=update.py -e TLEB_NO_FETCH=1 \
+        -v ./data/:/srv/elixir-data \
+        --entrypoint index elixir /srv/elixir-data musl
+  Time (mean ± σ):     30.446 s ±  0.064 s    [User: 0.017 s, System: 0.011 s]
+  Range (min … max):   30.395 s … 30.517 s    3 runs
+
+Benchmark 2: docker run -e TLEB_UPDATE=update-ng.py -e TLEB_NO_FETCH=1 \
+        -v ./data/:/srv/elixir-data \
+        --entrypoint index elixir /srv/elixir-data musl
+  Time (mean ± σ):      6.868 s ±  0.069 s    [User: 0.022 s, System: 0.023 s]
+  Range (min … max):    6.823 s …  6.947 s    3 runs
+
+Benchmark 3: docker run -e TLEB_UPDATE=update-franek.py -e TLEB_NO_FETCH=1 \
+        -v ./data/:/srv/elixir-data \
+        --entrypoint index elixir /srv/elixir-data musl
+  Time (mean ± σ):     60.444 s ±  0.117 s    [User: 0.016 s, System: 0.018 s]
+  Range (min … max):   60.321 s … 60.554 s    3 runs
+
+Summary
+  docker run -e TLEB_UPDATE=update-ng.py -e TLEB_NO_FETCH=1 \
+        -v ./data/:/srv/elixir-data \
+        --entrypoint index elixir /srv/elixir-data musl ran
+    4.43 ± 0.05 times faster than docker run -e TLEB_UPDATE=update.py -e TLEB_NO_FETCH=1 \
+        -v ./data/:/srv/elixir-data \
+        --entrypoint index elixir /srv/elixir-data musl
+    8.80 ± 0.09 times faster than docker run -e TLEB_UPDATE=update-franek.py -e TLEB_NO_FETCH=1 \
+        -v ./data/:/srv/elixir-data \
+        --entrypoint index elixir /srv/elixir-data musl

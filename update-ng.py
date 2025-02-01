@@ -12,8 +12,8 @@ import re
 import resource
 import tqdm
 
-import lib
-import data
+import elixir.lib as lib
+import elixir.data as data
 
 dts_comp_support = int(lib.script("dts-comp"))
 assert dts_comp_support == 0
@@ -225,7 +225,7 @@ def compute_refs(new_idxes, all_idxes, defs_set, new_defs_set, refs_aof_fd, chun
 
     # Maybe it is because they must each access to defs_set?
 
-    tqdm.tqdm.write(f"size defs_set: {sys.getsizeof(defs_set) // (1000*1000)} MB")
+    # tqdm.tqdm.write(f"size defs_set: {sys.getsizeof(defs_set) // (1000*1000)} MB")
     # 268MB is a lot if this gets copied to each thread
 
     chunksize = 10
@@ -336,9 +336,6 @@ def compute_blobs(new_tags):
             pass
 
 
-compute_blobs(new_tags)
-exit(0)
-
 
 
 with open(f'/tmp/elixir-update-{os.getpid()}-refs.txt', 'wb') as refs_aof_fd:
@@ -423,10 +420,10 @@ with open(f'/tmp/elixir-update-{os.getpid()}-refs.txt', 'wb') as refs_aof_fd:
 
 t6 = datetime.datetime.now()
 duration = (t6 - t0).total_seconds()
-print(f"total time: {duration:.2f}s")
+# print(f"total time: {duration:.2f}s")
 
 max_rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-print(f"max rss: {max_rss_kb / (1000*1000):.3f} GB")
+# print(f"max rss: {max_rss_kb / (1000*1000):.3f} GB")
 
 # TODO: update comps
 # TODO: update comps docs
