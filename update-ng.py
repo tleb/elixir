@@ -10,7 +10,7 @@ import os
 import sys
 import re
 import resource
-import tqdm
+# import tqdm
 
 import elixir.lib as lib
 import elixir.data as data
@@ -112,7 +112,7 @@ def compute_defs(new_idxes, chunksize):
     new_defs_set = set()
     with multiprocessing.Pool() as pool:
         it = pool.imap_unordered(compute_defs_for_idx, new_idxes, chunksize=chunksize)
-        it = tqdm.tqdm(it, desc="defs", total=len(new_idxes), leave=False)
+        # it = tqdm.tqdm(it, desc="defs", total=len(new_idxes), leave=False)
         for i, defs in enumerate(it):
             for ident, idx, ident_type, ident_lineno, blob_family in defs:
                 if ident in new_defs:
@@ -136,7 +136,7 @@ def compute_defs(new_idxes, chunksize):
                 # db.defs.put(ident, obj)
                 nb_new_defs += 1
 
-    for ident, defs in tqdm.tqdm(new_defs.items(), desc="defs->db", leave=False):
+    for ident, defs in new_defs.items():
         # TODO: undo change in data.py which sorts on .append()
         families = b",".join(sorted(set([family for _, _, _, family in defs])))
         defs = sorted(defs, key=lambda x: (x[0], x[1], str(x[2]), x[3]))
@@ -232,7 +232,7 @@ def compute_refs(new_idxes, all_idxes, defs_set, new_defs_set, refs_aof_fd, chun
 
     with multiprocessing.Pool() as pool:
         it = pool.imap_unordered(fn, new_idxes, chunksize=chunksize)
-        it = tqdm.tqdm(it, desc="refs", total=len(new_idxes), leave=False)
+        # it = tqdm.tqdm(it, desc="refs", total=len(new_idxes), leave=False)
         for refs, nb_new in it:
             refs_aof_fd.write(refs)
             nb_new_refs += nb_new
@@ -269,7 +269,7 @@ def compute_docs(new_idxes, chunksize):
 
     with multiprocessing.Pool() as pool:
         it = pool.imap_unordered(compute_docs_for_idx, new_idxes, chunksize=chunksize)
-        it = tqdm.tqdm(it, desc="docs", total=len(new_idxes), leave=False)
+        # it = tqdm.tqdm(it, desc="docs", total=len(new_idxes), leave=False)
         for i, docs in enumerate(it):
             for ident, idx, line_numbers, blob_family in docs:
                 if ident in new_docs:
@@ -301,7 +301,7 @@ def print_timing(t0, name, nb, blobs=None, it="it"):
     t1 = datetime.datetime.now()
     duration = (t1 - t0).total_seconds()
     its_per_sec = f" ({blobs / duration:.2f} {it}/s)" if blobs else ""
-    tqdm.tqdm.write(f"{name}: {nb} found, in {duration:.2f}s{its_per_sec}")
+    # tqdm.tqdm.write(f"{name}: {nb} found, in {duration:.2f}s{its_per_sec}")
 
 
 t0 = datetime.datetime.now()
@@ -330,7 +330,7 @@ def compute_blobs_for_tag(tag):
 def compute_blobs(new_tags):
     with multiprocessing.Pool() as pool:
         it = pool.imap(compute_blobs_for_tag, new_tags)
-        it = tqdm.tqdm(it, desc="blobs", total=len(new_tags), leave=False)
+        # it = tqdm.tqdm(it, desc="blobs", total=len(new_tags), leave=False)
         for blobs in it:
             # print(blobs.count(b'\n'))
             pass
@@ -339,7 +339,7 @@ def compute_blobs(new_tags):
 
 
 with open(f'/tmp/elixir-update-{os.getpid()}-refs.txt', 'wb') as refs_aof_fd:
-    for tag in tqdm.tqdm(new_tags, desc="tags", leave=False):
+    for tag in new_tags:
         t1 = datetime.datetime.now()
 
         # TODO: extract this part into its function
@@ -353,7 +353,7 @@ with open(f'/tmp/elixir-update-{os.getpid()}-refs.txt', 'wb') as refs_aof_fd:
             next_free_idx = 0
 
         blobs_it = lib.scriptLines("list-blobs", "-p", tag)
-        blobs_it = tqdm.tqdm(blobs_it, desc="blobs", leave=False)
+        # blobs_it = tqdm.tqdm(blobs_it, desc="blobs", leave=False)
         for line in blobs_it:
             blob_hash, blob_filepath = line.split(b" ", maxsplit=1)
 
@@ -414,7 +414,7 @@ with open(f'/tmp/elixir-update-{os.getpid()}-refs.txt', 'wb') as refs_aof_fd:
         nb = len(new_idxes)
         stats = f"{nb:5} blobs, {nb_new_defs:6} defs, {nb_new_refs:7} refs, {nb_new_docs:6} docs"
         timings = f"{nb / defs_duration:4.0f}, {nb / refs_duration:4.0f}, {nb / docs_duration:4.0f} blobs/s"
-        tqdm.tqdm.write(f"{tag.decode()}:\t{stats}, in {total_duration:6.2f}s ({timings})")
+        # tqdm.tqdm.write(f"{tag.decode()}:\t{stats}, in {total_duration:6.2f}s ({timings})")
 
 # TODO: put all refs into the db
 
