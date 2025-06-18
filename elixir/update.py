@@ -1,12 +1,20 @@
 import logging
 from multiprocessing import cpu_count
 from multiprocessing.pool import Pool
-from typing import Dict, Tuple, Iterable, List, Optional
-
-from elixir.lib import script, scriptLines, getFileFamily, isIdent, getDataDir, compatibleFamily, compatibleMacro
-from elixir.data import PathList, DefList, RefList, DB, BsdDB
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from find_compatible_dts import FindCompatibleDTS
+
+from elixir.data import DB, BsdDB, DefList, PathList, RefList
+from elixir.lib import (
+    compatibleFamily,
+    compatibleMacro,
+    getDataDir,
+    getFileFamily,
+    isIdent,
+    script,
+    scriptLines,
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -318,5 +326,4 @@ if __name__ == "__main__":
                 update_version(db, tag, pool, dts_comp_support)
                 db.close()
                 db = None
-                break
 
