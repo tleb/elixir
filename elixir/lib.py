@@ -54,13 +54,16 @@ def scriptLines(*args, env=None):
     return p
 
 
+def scriptVersions():
+    res = []
+    for line in scriptLines("versions"):
+        tag, version, is_rc = decode(line).split("\t")
+        res.append((tag, version, int(is_rc) != 0))
+    return res
+
+
 def unescape(bstr):
-    subs = (("\1", "\n"),)
-    for a, b in subs:
-        a = a.encode()
-        b = b.encode()
-        bstr = bstr.replace(a, b)
-    return bstr
+    return bstr.replace(b"\1", b"\n")
 
 
 def decode(byte_object):
@@ -220,16 +223,13 @@ def currentProject():
 # List all families supported by Elixir
 families = ["A", "B", "C", "D", "K", "M"]
 
-# Those families have databases that cache the content of definitions.db.
-# This allows faster lookup.
-CACHED_DEFINITIONS_FAMILIES = ["C", "K", "D", "M"]
-
 
 def validFamily(family):
     return family in families
 
 
 def getFileFamily(filename):
+    assert isinstance(filename, str)
     name, ext = os.path.splitext(filename)
     name, ext = name.lower(), ext.lower()
 
@@ -237,11 +237,11 @@ def getFileFamily(filename):
         return "C"  # C file family and ASM
     elif ext in [".dts", ".dtsi"]:
         return "D"  # Devicetree files
-    elif name[:7] == "kconfig" and ext != ".rst":
+    elif name.startswith("kconfig") and ext != ".rst":
         # Some files are named like Kconfig-nommu so we only check the first 7 letters
         # We also exclude documentation files that can be named kconfig
         return "K"  # Kconfig files
-    elif name[:8] == "makefile" and ext != ".rst" or ext == ".mk":
+    elif name.startswith("makefile") and ext != ".rst":
         return "M"  # Makefiles
     else:
         return None
@@ -263,8 +263,4 @@ def compatibleFamily(file_family, requested_family):
 # First argument can be a list of different families
 # Second argument is the key for choosing the right array in the compatibility list
 def compatibleMacro(macro_family, requested_family):
-    result = False
-    for item in macro_family:
-        item += "M"
-        result = result or item in compatibility_list[requested_family]
-    return result
+    return requested_family == "D" and "C" in macro_family

@@ -24,6 +24,9 @@ from collections import OrderedDict
 from io import BytesIO
 from urllib import parse
 
+import duckdb
+import numpy as np
+
 from . import data, lib
 from .lib import decode, script, scriptLines
 
@@ -63,8 +66,11 @@ class Query:
         self.repo_dir = repo_dir
         self.data_dir = data_dir
         self.dts_comp_support = int(self.script("dts-comp"))
-        self.db = data.DB(data_dir, readonly=True, dtscomp=self.dts_comp_support)
+        self.ddb = duckdb.connect(os.path.join(data_dir, "data.db"), read_only=True)
         self.file_cache = {}
+
+    def close(self):
+        self.ddb.close()
 
     def script(self, *args):
         return script(*args, env=self.getEnv())
@@ -79,21 +85,27 @@ class Query:
             "LXR_DATA_DIR": self.data_dir,
         }
 
-    def close(self):
-        self.db.close()
-
     # Check if a dts compatible string exists
     def dts_comp_exists(self, ident):
         if self.dts_comp_support:
+            raise NotImplementedError
             return self.db.comps.exists(ident)
         else:
             return False
 
     # Returns True if file exists
     def file_exists(self, version, path):
+
+        # TODO: make this take an array of (version, path) pairs. It is used by
+        # elixir/filters/makefile*.py, they should accumulate everything and do a single
+        # query.
+
+        print(version, path)
+
         if version not in self.file_cache:
             version_cache = set()
             last_dir = None
+            raise NotImplementedError
             for _, path in self.db.version_blobs.get(version).iter():
                 dirname, filename = os.path.split(path)
                 if dirname != last_dir:
@@ -108,39 +120,42 @@ class Query:
     # Returns the contents of the specified file
     # Tokens are marked for further processing
     # Example: v3.1-rc10 /Makefile
+    #
+    # TODO: we could do better than this now. We can do a lookup by blobid for all defs/refs.
     def get_tokenized_file(self, version, path):
         filename = os.path.basename(path)
         family = lib.getFileFamily(filename)
 
-        if family != None:
-            assert family in lib.CACHED_DEFINITIONS_FAMILIES, (
-                f"family {family} must have its definitions cached"
-            )
+        if family is None:
+            return decode(self.script("get-file", version, path))
 
-            buffer = BytesIO()
-            tokens = self.scriptLines("tokenize-file", version, path, family)
-            even = True
+        even = True
+        prefix = b"CONFIG_" if family == "K" else b""
+        tokens = []
 
-            prefix = b""
-            if family == "K":
-                prefix = b"CONFIG_"
+        for tok in self.scriptLines("tokenize-file", version, path, family):
+            even = not even
+            tokens.append((tok, prefix + tok, even))
 
-            for tok in tokens:
-                even = not even
-                tok2 = prefix + tok
-                if even and self.db.defs_cache[family].exists(tok2):
-                    tok = b"\033[31m" + tok2 + b"\033[0m"
-                else:
-                    tok = lib.unescape(tok)
-                buffer.write(tok)
-            return decode(buffer.getvalue())
-        else:
-            return decode(self.script("get-file", self.version_to_tag(version), path))
+        defnames = {tok2.decode() for _, tok2, even in tokens if even}
+        defnames = np.unique(list(defnames))
+        defs = self.ddb.sql("""SELECT DISTINCT defname FROM defs
+                               WHERE defname IN (SELECT * FROM defnames)""")
+        defs = set(defs.df()["defname"])
+
+        buffer = BytesIO()
+        for tok, tok2, even in tokens:
+            if even and tok2.decode() in defs:
+                buffer.write(b"\033[31m" + tok2 + b"\033[0m")
+            else:
+                buffer.write(lib.unescape(tok))
+        return decode(buffer.getvalue())
 
     # Returns the contents (trees or blobs) of the specified directory
     # Example: v3.1-rc10 /arch
     def get_dir_contents(self, version, path):
-        entries_str = decode(self.script("get-dir", self.version_to_tag(version), path))
+        tag = self.version_to_tag(version)
+        entries_str = decode(self.script("get-dir", tag, path))
         return entries_str.split("\n")[:-1]
 
     # Returns indexed versions, as a tree of OrderedDict.
@@ -162,8 +177,10 @@ class Query:
         return versions
 
     def version_to_tag(self, version):
-        # TODO: make query in self
-        return self.db.version_tag.get(version)
+        # TODO: can we avoid?
+        return self.ddb.execute(
+            "SELECT versiontag FROM versions WHERE versionname = ?", (version,)
+        ).fetchone()[0]
 
     # Returns the type (blob or tree) associated to
     # the given path. Example:
@@ -193,11 +210,13 @@ class Query:
 
     # Returns the latest tag that is included in the database.
     # This excludes release candidates if `rc` is False.
-    def get_latest_tag(self, rc):
-        for _, version, tag_is_rc in self.versions_cmd():
-            if rc or not tag_is_rc:
-                return version
-        raise ValueError("could not find latest version")
+    def get_latest_tag(self, rc=False):
+        if rc:
+            query = "SELECT versionname FROM versions ORDER BY versionid"
+        else:
+            query = "SELECT versionname FROM versions WHERE is_rc = false ORDER BY versionid"
+
+        return self.ddb.sql(query).fetchone()[0]
 
     def get_file_raw(self, version, path):
         return decode(self.script("get-file", self.version_to_tag(version), path))
@@ -215,6 +234,7 @@ class Query:
         # DT compatible strings are quoted in the database
         ident = parse.quote(ident)
 
+        raise NotImplementedError
         if not self.dts_comp_support or not self.db.comps.exists(ident):
             return symbol_c, symbol_dts, symbol_docs, False
 
@@ -259,82 +279,72 @@ class Query:
 
         return symbol_c, symbol_dts, symbol_docs, True
 
-    def get_idents_defs(self, version, ident, family):
+    def def_exists_in_db(self, defname):
+        assert isinstance(defname, str)  # bytes wouldn't work
+        QUERY = "SELECT 1 FROM defs WHERE defname = ? LIMIT 1;"
+        return self.ddb.execute(QUERY, (defname,)).fetchone() is not None
 
-        symbol_definitions = []
-        symbol_references = []
-        symbol_doccomments = []
+    def maybe_versionname_to_versionid(self, versionname):
+        assert isinstance(versionname, str)  # bytes wouldn't work
+        QUERY = "SELECT versionid FROM versions WHERE versionname = ?;"
+        versionid = self.ddb.execute(QUERY, (versionname,)).fetchone()
+        return None if versionid is None else versionid[0]
 
-        if not self.db.defs.exists(ident):
+    def get_idents_defs(self, versionname, ident, blobfamily):
+        if not self.def_exists_in_db(ident):
+            return symbol_definitions, symbol_references, symbol_doccomments, False
+        versionid = self.maybe_versionname_to_versionid(versionname)
+        if versionid is None:  # version doesn't exist
             return symbol_definitions, symbol_references, symbol_doccomments, False
 
-        if not self.db.version_tag.exists(version):
-            return symbol_definitions, symbol_references, symbol_doccomments, True
-
-        files_this_version = self.db.version_blobs.get(version).iter()
-        this_ident = self.db.defs.get(ident)
-        defs_this_ident = this_ident.iter(dummy=True)
-        macros_this_ident = this_ident.get_macros()
-        # FIXME: see why we can have a discrepancy between defs_this_ident and refs
-        if self.db.refs.exists(ident):
-            refs = self.db.refs.get(ident).iter(dummy=True)
+        # TODO: move that to a static SQL query to avoid building it as a string?
+        if blobfamily == "A":
+            fam_filter = ""  # no blobfamily filtering
+        elif blobfamily == "D":
+            # The previous behavior was different: if we searched for DTSI and the def had
+            # macros defined in C code, we returned all defs. We move away from that;
+            # instead we return only entries that are macros defined in C.
+            fam_filter = (
+                "AND (blobfamily == 'D' OR (blobfamily == 'C' AND deftype == 'macro'))"
+            )
         else:
-            refs = data.RefList().iter(dummy=True)
+            fam_filter = "AND blobfamily == $f"
 
-        if self.db.docs.exists(ident):
-            docs = self.db.docs.get(ident).iter(dummy=True)
-        else:
-            docs = data.RefList().iter(dummy=True)
+        QUERY = (
+            """
+        SELECT filepath, defline, deftype FROM defs
+        INNER JOIN version_objects ON defs.blobid = version_objects.blobid
+        WHERE defname = $d AND versionid = $v """
+            + fam_filter
+        )
+        defs = self.ddb.execute(
+            QUERY, parameters={"d": ident, "v": versionid, "f": blobfamily}
+        )
+        defs = [
+            SymbolInstance(x.filepath, x.defline, x.deftype)
+            for x in defs.df().itertuples()
+        ]
 
-        # vers, defs, refs, and docs are all populated by update.py in order of
-        # idx, and there is a one-to-one mapping between blob hashes and idx
-        # values.  Therefore, we can sequentially step through the defs, refs,
-        # and docs for each file in a version.
+        if blobfamily == "A":
+            fam_filter = ""
+        elif blobfamily == "C":
+            fam_filter = "AND (blobfamily = $f OR blobfamily = 'K')"
+        elif blobfamily in ["K", "D", "M"]:
+            fam_filter = "AND blobfamily = $f"
 
-        def_idx, def_type, def_line, def_family = next(defs_this_ident)
-        ref_idx, ref_lines, ref_family = next(refs)
-        doc_idx, doc_line, doc_family = next(docs)
+        QUERY = (
+            """
+        SELECT filepath, refline FROM refs
+        INNER JOIN version_objects ON refs.blobid = version_objects.blobid
+        WHERE refname = $r AND versionid = $v """
+            + fam_filter
+        )
+        refs = self.ddb.execute(
+            QUERY, parameters={"r": ident, "v": versionid, "f": blobfamily}
+        )
+        refs = [SymbolInstance(x.filepath, x.refline) for x in refs.df().itertuples()]
 
-        dBuf = []
-        rBuf = []
-        docBuf = []
+        # TODO: deal with doccomments!
+        # TODO: previous code sorts defs and refs, we might want to replicate that.
 
-        for file_idx, file_path in files_this_version:
-            # Advance defs, refs, and docs to the current file
-            while def_idx < file_idx:
-                def_idx, def_type, def_line, def_family = next(defs_this_ident)
-            while ref_idx < file_idx:
-                ref_idx, ref_lines, ref_family = next(refs)
-            while doc_idx < file_idx:
-                doc_idx, doc_line, doc_family = next(docs)
-
-            # Copy information about this identifier into dBuf, rBuf, and docBuf.
-            while def_idx == file_idx:
-                if (
-                    def_family == family
-                    or family == "A"
-                    or lib.compatibleMacro(macros_this_ident, family)
-                ):
-                    dBuf.append((file_path, def_type, def_line))
-                def_idx, def_type, def_line, def_family = next(defs_this_ident)
-
-            if ref_idx == file_idx:
-                if lib.compatibleFamily(family, ref_family) or family == "A":
-                    rBuf.append((file_path, ref_lines))
-
-            if doc_idx == file_idx:  # TODO should this be a `while`?
-                docBuf.append((file_path, doc_line))
-
-        # Sort dBuf by path name before sorting by type in the loop
-        dBuf.sort()
-
-        for path, type, dline in sorted(dBuf, key=lambda d: d[1], reverse=True):
-            symbol_definitions.append(SymbolInstance(path, dline, type))
-
-        for path, rlines in sorted(rBuf):
-            symbol_references.append(SymbolInstance(path, rlines))
-
-        for path, docline in sorted(docBuf):
-            symbol_doccomments.append(SymbolInstance(path, docline))
-
-        return symbol_definitions, symbol_references, symbol_doccomments, True
+        return defs, refs, [], True

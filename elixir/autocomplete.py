@@ -17,12 +17,9 @@
 #  You should have received a copy of the GNU Affero General Public License
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
-from urllib import parse
-
 import falcon
-from berkeleydb.db import DB_SET_RANGE
 
-from .lib import autoBytes, validFamily
+from .lib import validFamily
 from .query import get_query
 from .web_utils import validate_ident, validate_project
 
@@ -49,35 +46,13 @@ class AutocompleteResource:
             resp.status = falcon.HTTP_NOT_FOUND
             return
 
-        if family == "B":
-            # DTS identifiers are stored quoted
-            process = lambda x: parse.unquote(x)
-            db = query.db.comps
-        else:
-            process = lambda x: x
-            db = query.db.defs
+        prefix = ident_prefix + "%"
+        results = query.ddb.execute(
+            "SELECT DISTINCT defname FROM defs WHERE defname LIKE ? ORDER BY defname LIMIT 10",
+            [prefix],
+        ).fetchall()
 
-        response = []
-
-        i = 0
-        cur = db.db.cursor()
-        query_bytes = autoBytes(parse.quote(ident_prefix))
-        # Find "the smallest key greater than or equal to the specified key"
-        # https://docs.oracle.com/cd/E17276_01/html/api_reference/C/dbcget.html
-        # In practice this should mean "the key that starts with provided prefix"
-        # See docs about the default comparison function for B-Tree databases:
-        # https://docs.oracle.com/cd/E17276_01/html/api_reference/C/dbset_bt_compare.html
-        key, _ = cur.get(query_bytes, DB_SET_RANGE)
-        while i <= 10:
-            if key.startswith(query_bytes):
-                # If found key starts with the prefix, add to response
-                # and move to the next key
-                i += 1
-                response.append(process(key.decode("utf-8")))
-                key, _ = cur.next()
-            else:
-                # If found key does not start with the prefix, stop
-                break
+        response = [row[0] for row in results]
 
         resp.status = falcon.HTTP_200
         resp.content_type = falcon.MEDIA_JSON

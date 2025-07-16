@@ -3,12 +3,13 @@ from elixir.query import Query
 
 
 def cmd_stats(q, **kwargs):
-    print("Versions: ", len(q.db.version_tag))
-    print("Blobs: ", len(q.db.blob))
-    if len(q.db.blob) != len(q.db.hash) or len(q.db.hash) != len(q.db.file):
-        print("Warning, number of blobs, hashes or files is not equal")
-    print("Definitions: ", len(q.db.defs))
-    print("References: ", len(q.db.refs))
+    def fetch(sql):
+        return q.ddb.execute(sql).fetchone()[0]
+
+    print(f"Versions:    {fetch('SELECT COUNT(*) FROM versions'):10d}")
+    print(f"Blobs:       {fetch('SELECT COUNT(*) FROM blobs'):10d}")
+    print(f"Definitions: {fetch('SELECT COUNT(*) FROM defs'):10d}")
+    print(f"References:  {fetch('SELECT COUNT(*) FROM refs'):10d}")
 
 
 def cmd_versions(q, **kwargs):
@@ -36,6 +37,7 @@ def cmd_ident(q, version, ident, family, **kwargs):
 
 
 def cmd_file(q, version, path, **kwargs):
+    # TODO: ensure path starts with '/'
     code = q.get_tokenized_file(version, path)
     print(code)
 

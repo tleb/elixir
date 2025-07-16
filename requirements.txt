@@ -1,9 +1,11 @@
-Jinja2~=3.1.5
-Pygments~=2.18.0
-Falcon~=4.0.2
-pytest==7.2.1
-
-# NOTE binary wheels of berkeleydb are not distributed - on Debian this may
-# require installing build-essentials, python3-dev and libdb-dev
-# NOTE keep in sync with wheel version in the Dockerfile
-berkeleydb==18.1.10
+duckdb==1.3.2
+falcon==4.0.2
+Jinja2==3.1.6
+MarkupSafe==3.0.2
+numpy==2.3.1
+pandas==2.3.1
+Pygments==2.19.2
+python-dateutil==2.9.0.post0
+pytz==2025.2
+six==1.17.0
+tzdata==2025.2

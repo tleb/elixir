@@ -8,14 +8,9 @@ RUN \
     libdb-dev \
     libseccomp-dev libjansson-dev libyaml-dev libxml2-dev
 
-WORKDIR /build-berkeleydb/
-
-# NOTE wheel version MUST be sycnhronized with requirements.txt
-RUN pip wheel berkeleydb==18.1.10
-
 WORKDIR /build-ctags/
 
-RUN git clone --branch v6.1.0 --depth 1 https://github.com/universal-ctags/ctags.git
+RUN git clone --branch v6.2.0 --depth 1 https://github.com/universal-ctags/ctags.git
 WORKDIR ctags
 RUN ./autogen.sh && ./configure && make -j $(nproc)
 
@@ -41,11 +36,8 @@ COPY ./requirements.txt /usr/local/elixir/
 
 WORKDIR /usr/local/elixir/
 
-COPY --from=build /build-berkeleydb/berkeleydb-*.whl /tmp/build/
-
 RUN python3 -m venv venv && \
     . ./venv/bin/activate && \
-    pip install /tmp/build/berkeleydb-*.whl && \
     pip install -r requirements.txt
 
 COPY --from=build /build-ctags/ctags/ctags /usr/bin/ctags
