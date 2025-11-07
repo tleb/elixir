@@ -243,15 +243,6 @@ The response body is of the following structure:
 
 = Maintenance and enhancements
 
-== Using a cache to improve performance
-
-At Bootlin, we're using the https://varnish-cache.org/[Varnish http cache]
-as a front-end to reduce the load on the server running the Elixir code.
-
- .-------------.           .---------------.           .-----------------------.
- | Http client | --------> | Varnish cache | --------> | Apache running Elixir |
- '-------------'           '---------------'           '-----------------------'
-
 == Keeping Elixir databases up to date
 
 To keep your Elixir databases up to date and index new versions that are released,
