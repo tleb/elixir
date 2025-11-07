@@ -361,11 +361,6 @@ rendering, adding links & such. Defaults are sensible for C projects but you
 might want to add support for Makefile, Kconfig, etc. That is done in
 `elixir/filters/projects.py`.
 
-== How to send patches
-
-The best way to share your contributions with us is to https://github.com/bootlin/elixir/pulls[file a pull
-request on GitHub].
-
 = Automated testing
 
 Elixir includes a simple test suite in `t/`.  To run it,
