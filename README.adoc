@@ -361,11 +361,6 @@ rendering, adding links & such. Defaults are sensible for C projects but you
 might want to add support for Makefile, Kconfig, etc. That is done in
 `elixir/filters/projects.py`.
 
-== Coding style
-
-If you wish to contribute to Elixir's Python code, please
-follow the https://www.python.org/dev/peps/pep-0008/[official coding style for Python].
-
 == How to send patches
 
 The best way to share your contributions with us is to https://github.com/bootlin/elixir/pulls[file a pull
