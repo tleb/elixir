@@ -313,23 +313,6 @@ Changes in the code made on the host should be automatically reflected in the co
 You can use `apache2ctl` to restart Apache.
 Error logs are available in `/var/log/apache2/error.log` within the container.
 
-= Hardware requirements
-
-Performance requirements depend mostly on the amount of traffic that you get
-on your Elixir service. However, a fast server also helps for the initial
-indexing of the projects.
-
-SSD storage is strongly recommended because of the frequent access to
-git repositories.
-
-At Bootlin, here are a few details about the server we're using:
-
-* As of July 2019, our Elixir service consumes 17 GB of data (supporting all projects),
-or for the Linux kernel alone (version 5.2 being the latest), 12 GB for indexing data,
-and 2 GB for the git repository.
-* We're using an LXD instance with 8 GB of RAM on a cloud server with 8 CPU cores
-running at 3.1 GHz.
-
 = Contributing to Elixir
 
 == Supporting a new project
