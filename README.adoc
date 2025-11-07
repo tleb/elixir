@@ -334,98 +334,49 @@ running at 3.1 GHz.
 
 == Supporting a new project
 
-Elixir has a very simple modular architecture that allows to support
-new source code projects by just adding a new file to the Elixir sources.
+We try our best to allow any project to be plugged in. However, we have many
+assumptions about the code we parse coming from our background of parsing the
+Linux kernel.
 
 Elixir's assumptions:
 
-* Project sources have to be available in a git repository
-* All project releases are associated to a given git tag. Elixir
-only considers such tags.
+* C code.
+* Project sources have to be available in one git repository (or more than one).
+* A release is a Git tag.
 
-First make an installation of Elixir by following the above instructions.
-See the `projects` subdirectory for projects that are already supported.
+First make an installation of Elixir by following the above instructions. Docker
+is recommended but it is doable without.
 
-Once Elixir works for at least one project, it's time to clone the git
-repository for the project you want to support:
+Once Elixir works for at least one project (`musl` is a good testing ground), it
+is time to add your project. The list of existing projects is `ls projects/`.
 
- cd /srv/git
- git clone --bare https://github.com/zephyrproject-rtos/zephyr
+Required steps are:
 
-After doing this, you may also reference and fetch remote branches for this project,
-for example corresponding to the `stable` tree for the Linux kernel (see the
-instructions for Linux earlier in this document).
+* Add one or more remotes in `utils/index`.
+* Create an empty `projects/<PROJECT_NAME>.sh`.
 
-Now, in your `LXR_PROJ_DIR` directory, create a new directory for the
-new project:
+What follows is project specific details that you might need to fill in.
 
- cd $LXR_PROJ_DIR
- mkdir -p zephyr/data
- ln -s /srv/git/zephyr.git repo
- export LXR_DATA_DIR=$LXR_PROJ_DIR/data
- export LXR_REPO_DIR=$LXR_PROJ_DIR/repo
+First off, tags parsing. If tags are not formatted correctly, or some should be
+hidden, that is done with a custom `list_tags()` function inside
+`projects/<PROJECT_NAME>.sh`. `git grep 'list_tags(' projects/` to find examples.
 
-Now, go back to the Elixir sources and test that tags are correctly
-extracted:
+The `list_tags_h()` function does the same thing, but generates a tree of tags
+to be used in the Elixir sidebar. It is three fields per line, with
+`<top_menu>\t<sub_menu>\t<version>` format. Try your best to make both
+`list_tags()` and `list_tags_h()` agree; most projects do it wrong.
 
- ./script.sh list-tags
+On the same topic, `get_latest_tags()` is used to find the latest version. By
+default it ignores "-rc" versions. You might want to tweak it to your project
+to avoid beta builds.
 
-Depending on how you want to show the available versions on the Elixir pages,
-you may have to apply substitutions to each tag string, for example to add
-a `v` prefix if missing, for consistency with how other project versions are
-shown. You may also decide to ignore specific tags. All this can be done
-by redefining the default `list_tags()` function in a new `projects/<projectname>.sh`
-file. Here's an example (`projects/zephyr.sh` file):
+In the same `projects/<PROJECT_NAME>.sh` file, setting `dts_comp_support=1`
+enables `compatible` parsing in devicetree files.
 
- list_tags()
- {
-     echo "$tags" |
-     grep -v '^zephyr-v'
- }
-
-Note that `<project_name>` *must* match the name of the directory that
-you created under `LXR_PROJ_DIR`.
-
-The next step is to make sure that versions are classified as you wish
-in the version menu. This classification work is done through the
-`list_tags_h()` function which generates the output of the `./scripts.sh list-tags -h`
-command. Here's what you get for the Linux project:
-
- v4 v4.16 v4.16
- v4 v4.16 v4.16-rc7
- v4 v4.16 v4.16-rc6
- v4 v4.16 v4.16-rc5
- v4 v4.16 v4.16-rc4
- v4 v4.16 v4.16-rc3
- v4 v4.16 v4.16-rc2
- v4 v4.16 v4.16-rc1
- ...
-
-The first column is the top level menu entry for versions.
-The second one is the next level menu entry, and
-the third one is the actual version that can be selected by the menu.
-Note that this third entry must correspond to the exact
-name of the tag in git.
-
-If the default behavior is not what you want, you will have
-to customize the `list_tags_h` function.
-
-You should also make sure that Elixir properly identifies
-the most recent versions:
-
- ./script.sh get-latest-tags | head
-
-If needed, customize the `get_latest_tags()` function.
-
-If you want to enable support for `compatible` properties in Devicetree files,
-add `dts_comp_support=1` at the beginning of `projects/<projectname>.sh`.
-
-You are now ready to generate Elixir's database for your
-new project:
-
- ./update.py <number of threads>
-
-You can then check that Elixir works through your http server.
+Also, you might need to configure _filters_. They get applied to the HTML before
+rendering, adding links & such. Defaults are sensible for C projects but you
+might want to add support for Makefile, Kconfig, etc. That is done in
+`elixir/filters/projects.py`.
 
 == Coding style
 
