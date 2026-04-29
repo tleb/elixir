@@ -23,6 +23,7 @@ BLOBFAMILY_DTYPE = pd.CategoricalDtype(
 
 # Must regenerate the databases when this gets updated!
 DEFTYPES = {
+    "compatible",
     "config",
     "define",
     "enum",
