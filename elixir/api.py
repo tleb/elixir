@@ -42,7 +42,7 @@ class ApiIdentGetterResource:
 
         if version in ("latest", "latest-rc"):
             rc = version == "latest-rc"
-            version = query.get_latest_tag(rc=rc)
+            version = query.get_latest_version(rc=rc)
 
         symbol_definitions, symbol_references, symbol_doccomments, _ = (
             query.search_ident(version, ident, family)

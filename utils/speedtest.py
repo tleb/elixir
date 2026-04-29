@@ -90,7 +90,7 @@ def init_query(project):
 def get_ident(query, ident, version):
     if version == ("latest", "latest-rc"):
         rc = version == "latest"
-        version = query.get_latest_tag(rc=rc)
+        version = query.get_latest_version(rc=rc)
 
     return query.search_ident(version, ident[0], ident[1])
 
@@ -98,7 +98,7 @@ def get_ident(query, ident, version):
 def get_file(query, path, version):
     if version == ("latest", "latest-rc"):
         rc = version == "latest"
-        version = query.get_latest_tag(rc=rc)
+        version = query.get_latest_version(rc=rc)
 
     return query.get_file(version, path)
 

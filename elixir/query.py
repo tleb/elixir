@@ -209,9 +209,9 @@ class Query:
             tag, version, is_rc = line.split("\t")
             yield (tag, version, bool(is_rc))
 
-    # Returns the latest tag that is included in the database.
+    # Returns the latest version that is included in the database.
     # This excludes release candidates if `rc` is False.
-    def get_latest_tag(self, rc=False):
+    def get_latest_version(self, rc=False):
         if rc:
             query = "SELECT versionname FROM versions ORDER BY versionid"
         else:

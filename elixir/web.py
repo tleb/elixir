@@ -139,7 +139,7 @@ def get_project_error_page(req, resp, exception: ElixirProjectError):
             # If details about current version are not available, make base links
             # point to latest.
             # current_tag is not set to latest to avoid latest being highlighted in the sidebar
-            version = query.get_latest_tag()
+            version = query.get_latest_version()
 
         template_ctx = {
             **template_ctx,
@@ -244,7 +244,7 @@ class IndexResource:
                 status=falcon.HTTP_INTERNAL_SERVER_ERROR,
             )
 
-        version = query.get_latest_tag()
+        version = query.get_latest_version()
         resp.status = falcon.HTTP_FOUND
         resp.location = stringify_source_path(project, version, "/")
         return
@@ -278,7 +278,7 @@ class SourceResource:
 
         if version in ("latest", "latest-rc"):
             rc = version == "latest-rc"
-            version = query.get_latest_tag(rc=rc)
+            version = query.get_latest_version(rc=rc)
             resp.status = falcon.HTTP_FOUND
             resp.location = stringify_source_path(project, version, path)
             return
@@ -418,7 +418,7 @@ class IdentResource(IdentPostRedirectResource):
 
         if version in ("latest", "latest-rc"):
             rc = version == "latest-rc"
-            version = query.get_latest_tag(rc=rc)
+            version = query.get_latest_version(rc=rc)
             resp.status = falcon.HTTP_FOUND
             resp.location = stringify_ident_path(project, version, family, ident)
             return
@@ -454,7 +454,7 @@ class IncompleteURLRedirectResource:
 
         if version in ("latest", "latest-rc") or len(version) == 0:
             rc = version == "latest-rc"
-            version = query.get_latest_tag(rc=rc)
+            version = query.get_latest_version(rc=rc)
 
         resp.status = falcon.HTTP_FOUND
         resp.location = stringify_source_path(project, version, "/")
