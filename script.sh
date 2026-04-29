@@ -122,6 +122,14 @@ parse_defs()
     esac
 }
 
+parse_comps()
+{
+    tmpfile=`mktemp`
+    git cat-file blob "$opt1" > "$tmpfile"
+    "$script_dir/find_compatible_dts.py" "$tmpfile" "$opt2" || exit "$?"
+    rm -rf "$tmpfile"
+}
+
 parse_defs_C()
 {
     tmp=`mktemp -d`
@@ -233,6 +241,10 @@ case $cmd in
 
     untokenize)
         untokenize
+        ;;
+
+    parse-comps)
+        parse_comps
         ;;
 
     parse-defs)
