@@ -22,12 +22,11 @@ import os
 import re
 from collections import OrderedDict
 from io import BytesIO
-from urllib import parse
 
 import duckdb
 import numpy as np
 
-from . import data, lib
+from . import lib
 from .lib import decode, script, scriptLines
 
 
@@ -89,7 +88,6 @@ class Query:
     def dts_comp_exists(self, ident):
         if self.dts_comp_support:
             raise NotImplementedError
-            return self.db.comps.exists(ident)
         else:
             return False
 
@@ -100,18 +98,20 @@ class Query:
         # elixir/filters/makefile*.py, they should accumulate everything and do a single
         # query.
 
-        print(version, path)
-
         if version not in self.file_cache:
+            versionid = self.maybe_versionname_to_versionid(version)
+            if versionid is None:
+                self.file_cache[version] = set()
+                return False
+
             version_cache = set()
-            last_dir = None
-            raise NotImplementedError
-            for _, path in self.db.version_blobs.get(version).iter():
-                dirname, filename = os.path.split(path)
-                if dirname != last_dir:
-                    last_dir = dirname
-                    version_cache.add(dirname)
-                version_cache.add(path)
+            rows = self.ddb.execute(
+                "SELECT filepath FROM version_objects WHERE versionid = ?",
+                [versionid],
+            ).fetchall()
+            for (filepath,) in rows:
+                version_cache.add(filepath)
+                version_cache.add(os.path.dirname(filepath))
 
             self.file_cache[version] = version_cache
 
@@ -222,62 +222,7 @@ class Query:
         return decode(self.script("get-file", self.version_to_tag(version), path))
 
     def get_idents_comps(self, version, ident):
-
-        # DT bindings compatible strings are handled differently
-        # They are defined in C files
-        # Used in DT files
-        # Documented in documentation files
-        symbol_c = []
-        symbol_dts = []
-        symbol_docs = []
-
-        # DT compatible strings are quoted in the database
-        ident = parse.quote(ident)
-
         raise NotImplementedError
-        if not self.dts_comp_support or not self.db.comps.exists(ident):
-            return symbol_c, symbol_dts, symbol_docs, False
-
-        files_this_version = self.db.version_blobs.get(version).iter()
-        comps = self.db.comps.get(ident).iter(dummy=True)
-
-        if self.db.comps_docs.exists(ident):
-            comps_docs = self.db.comps_docs.get(ident).iter(dummy=True)
-        else:
-            comps_docs = data.RefList().iter(dummy=True)
-
-        comps_idx, comps_lines, comps_family = next(comps)
-        comps_docs_idx, comps_docs_lines, comps_docs_family = next(comps_docs)
-        compsCBuf = []  # C/CPP/ASM files
-        compsDBuf = []  # DT files
-        compsBBuf = []  # DT bindings docs files
-
-        for file_idx, file_path in files_this_version:
-            while comps_idx < file_idx:
-                comps_idx, comps_lines, comps_family = next(comps)
-
-            while comps_docs_idx < file_idx:
-                comps_docs_idx, comps_docs_lines, comps_docs_family = next(comps_docs)
-
-            if comps_idx == file_idx:
-                if comps_family == "C":
-                    compsCBuf.append((file_path, comps_lines))
-                elif comps_family == "D":
-                    compsDBuf.append((file_path, comps_lines))
-
-            if comps_docs_idx == file_idx:
-                compsBBuf.append((file_path, comps_docs_lines))
-
-        for path, cline in sorted(compsCBuf):
-            symbol_c.append(SymbolInstance(path, cline, "compatible"))
-
-        for path, dlines in sorted(compsDBuf):
-            symbol_dts.append(SymbolInstance(path, dlines))
-
-        for path, blines in sorted(compsBBuf):
-            symbol_docs.append(SymbolInstance(path, blines))
-
-        return symbol_c, symbol_dts, symbol_docs, True
 
     def def_exists_in_db(self, defname):
         assert isinstance(defname, str)  # bytes wouldn't work
