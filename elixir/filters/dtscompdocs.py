@@ -1,5 +1,4 @@
 import re
-from urllib.parse import quote
 
 from .utils import Filter, FilterContext, decode_number, encode_number
 
@@ -24,7 +23,7 @@ class DtsCompDocsFilter(Filter):
         def keep_dtscompB(m):
             text = m.group(1)
 
-            if ctx.query.dts_comp_exists(quote(text)):
+            if ctx.query.dts_comp_exists(text):
                 self.dtscompB.append(text)
                 return f"__KEEPDTSCOMPB__{encode_number(len(self.dtscompB))}"
             else:
