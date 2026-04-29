@@ -34,7 +34,7 @@
                             <span class="{{ 'active' if minor == current_minor else '' }}">{{ minor }}</span>
                             <ul>
                                 {% for v in minor_versions %}
-                                    <li class="li-link {{ 'active' if v.version == current_tag else '' }}">
+                                    <li class="li-link {{ 'active' if v.version == current_version else '' }}">
                                         <a href="{{ v.url }}">
                                             {{ v.version }}
                                         </a>

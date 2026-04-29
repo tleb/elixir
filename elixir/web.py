@@ -138,13 +138,13 @@ def get_project_error_page(req, resp, exception: ElixirProjectError):
         if current_version_path[2] is None:
             # If details about current version are not available, make base links
             # point to latest.
-            # current_tag is not set to latest to avoid latest being highlighted in the sidebar
+            # current_version is not set to latest to avoid latest being highlighted in the sidebar
             version = query.get_latest_version()
 
         template_ctx = {
             **template_ctx,
             "current_project": project,
-            "current_tag": version,
+            "current_version": version,
             "versions": versions,
             "current_version_path": current_version_path,
             "home_page_url": get_source_base_url(project, version),
@@ -597,7 +597,7 @@ def get_layout_template_context(
         "source_base_url": get_source_base_url(project, version),
         "ident_base_url": get_ident_base_url(project, version),
         "current_project": project,
-        "current_tag": parse.unquote(version),
+        "current_version": parse.unquote(version),
         "current_family": "A",
     }
 
