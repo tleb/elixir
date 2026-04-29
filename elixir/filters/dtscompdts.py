@@ -1,5 +1,13 @@
 import re
-from .utils import Filter, FilterContext, encode_number, decode_number, extension_matches
+
+from .utils import (
+    Filter,
+    FilterContext,
+    decode_number,
+    encode_number,
+    extension_matches,
+)
+
 
 # Filter for DT compatible strings in DTS (D family) files
 # compatible = "device"
@@ -10,28 +18,33 @@ class DtsCompDtsFilter(Filter):
         self.dtscompD = []
 
     def check_if_applies(self, ctx) -> bool:
-        return super().check_if_applies(ctx) and \
-            ctx.query.dts_comp_support and \
-            extension_matches(ctx.filepath, {'dts', 'dtsi'})
+        return (
+            super().check_if_applies(ctx)
+            and ctx.query.dts_comp_support
+            and extension_matches(ctx.filepath, {"dts", "dtsi"})
+        )
 
     def transform_raw_code(self, ctx, code: str) -> str:
         def sub_func(m):
             match = m.group(0)
-            strings = re.findall("\"(.+?)\"", m.group(1))
+            strings = re.findall('"(.+?)"', m.group(1))
 
             for string in strings:
                 self.dtscompD.append(string)
-                match = match.replace(string, '__KEEPDTSCOMPD__' + encode_number(len(self.dtscompD)))
+                match = match.replace(
+                    string, "__KEEPDTSCOMPD__" + encode_number(len(self.dtscompD))
+                )
 
             return match
 
-        return re.sub('\s*compatible(.*?)$', sub_func, code, flags=re.MULTILINE)
+        return re.sub("\s*compatible(.*?)$", sub_func, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_dtscompD(m):
             i = self.dtscompD[decode_number(m.group(1)) - 1]
 
-            return f'<a class="ident" href="{ ctx.get_ident_url(i, "B") }">{ i }</a>'
+            return f'<a class="ident" href="{ctx.get_ident_url(i, "B")}">{i}</a>'
 
-        return re.sub('__KEEPDTSCOMPD__([A-J]+)', replace_dtscompD, html, flags=re.MULTILINE)
-
+        return re.sub(
+            "__KEEPDTSCOMPD__([A-J]+)", replace_dtscompD, html, flags=re.MULTILINE
+        )

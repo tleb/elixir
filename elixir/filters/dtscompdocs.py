@@ -1,6 +1,8 @@
 import re
 from urllib.parse import quote
-from .utils import Filter, FilterContext, encode_number, decode_number
+
+from .utils import Filter, FilterContext, decode_number, encode_number
+
 
 # Filter for DT compatible strings in documentation (B family) files
 # syscon
@@ -12,9 +14,11 @@ class DtsCompDocsFilter(Filter):
         self.dtscompB = []
 
     def check_if_applies(self, ctx) -> bool:
-        return super().check_if_applies(ctx) and \
-            ctx.query.dts_comp_support and \
-            ctx.filepath.startswith('/Documentation/devicetree/bindings')
+        return (
+            super().check_if_applies(ctx)
+            and ctx.query.dts_comp_support
+            and ctx.filepath.startswith("/Documentation/devicetree/bindings")
+        )
 
     def transform_raw_code(self, ctx, code: str) -> str:
         def keep_dtscompB(m):
@@ -22,17 +26,18 @@ class DtsCompDocsFilter(Filter):
 
             if ctx.query.dts_comp_exists(quote(text)):
                 self.dtscompB.append(text)
-                return f'__KEEPDTSCOMPB__{ encode_number(len(self.dtscompB)) }'
+                return f"__KEEPDTSCOMPB__{encode_number(len(self.dtscompB))}"
             else:
                 return m.group(0)
 
-        return re.sub('([\w-]+,?[\w-]+)', keep_dtscompB, code, flags=re.MULTILINE)
+        return re.sub("([\w-]+,?[\w-]+)", keep_dtscompB, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_dtscompB(m):
             i = self.dtscompB[decode_number(m.group(1)) - 1]
 
-            return f'<a class="ident" href="{ ctx.get_ident_url(i, "B") }">{ i }</a>'
+            return f'<a class="ident" href="{ctx.get_ident_url(i, "B")}">{i}</a>'
 
-        return re.sub('__KEEPDTSCOMPB__([A-J]+)', replace_dtscompB, html, flags=re.MULTILINE)
-
+        return re.sub(
+            "__KEEPDTSCOMPB__([A-J]+)", replace_dtscompB, html, flags=re.MULTILINE
+        )

@@ -18,15 +18,15 @@
 #  You should have received a copy of the GNU Affero General Public License
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
-from .lib import script, scriptLines, decode
-from . import lib
-from . import data
-import re
 import os
+import re
 from collections import OrderedDict
+from io import BytesIO
 from urllib import parse
 
-from io import BytesIO
+from . import data, lib
+from .lib import decode, script, scriptLines
+
 
 class SymbolInstance(object):
     def __init__(self, path, line, type=None):
@@ -44,23 +44,25 @@ class SymbolInstance(object):
     def __str__(self):
         return self.__repr__()
 
+
 # Returns a Query class instance or None if project data directory does not exist
 # basedir: absolute path to parent directory of all project data directories, ex. "/srv/elixir-data/"
 # project: name of the project, directory in basedir, ex. "linux"
 def get_query(basedir, project):
-    datadir = basedir + '/' + project + '/data'
-    repodir = basedir + '/' + project + '/repo'
+    datadir = basedir + "/" + project + "/data"
+    repodir = basedir + "/" + project + "/repo"
 
     if not os.path.exists(datadir) or not os.path.exists(repodir):
         return None
 
     return Query(datadir, repodir)
 
+
 class Query:
     def __init__(self, data_dir, repo_dir):
         self.repo_dir = repo_dir
         self.data_dir = data_dir
-        self.dts_comp_support = int(self.script('dts-comp'))
+        self.dts_comp_support = int(self.script("dts-comp"))
         self.db = data.DB(data_dir, readonly=True, dtscomp=self.dts_comp_support)
         self.file_cache = {}
 
@@ -101,7 +103,7 @@ class Query:
 
             self.file_cache[version] = version_cache
 
-        return path.strip('/') in self.file_cache[version]
+        return path.strip("/") in self.file_cache[version]
 
     # Returns the contents of the specified file
     # Tokens are marked for further processing
@@ -111,32 +113,34 @@ class Query:
         family = lib.getFileFamily(filename)
 
         if family != None:
-            assert family in lib.CACHED_DEFINITIONS_FAMILIES, f"family {family} must have its definitions cached"
+            assert family in lib.CACHED_DEFINITIONS_FAMILIES, (
+                f"family {family} must have its definitions cached"
+            )
 
             buffer = BytesIO()
-            tokens = self.scriptLines('tokenize-file', version, path, family)
+            tokens = self.scriptLines("tokenize-file", version, path, family)
             even = True
 
-            prefix = b''
-            if family == 'K':
-                prefix = b'CONFIG_'
+            prefix = b""
+            if family == "K":
+                prefix = b"CONFIG_"
 
             for tok in tokens:
                 even = not even
                 tok2 = prefix + tok
                 if even and self.db.defs_cache[family].exists(tok2):
-                    tok = b'\033[31m' + tok2 + b'\033[0m'
+                    tok = b"\033[31m" + tok2 + b"\033[0m"
                 else:
                     tok = lib.unescape(tok)
                 buffer.write(tok)
             return decode(buffer.getvalue())
         else:
-            return decode(self.script('get-file', self.version_to_tag(version), path))
+            return decode(self.script("get-file", self.version_to_tag(version), path))
 
     # Returns the contents (trees or blobs) of the specified directory
     # Example: v3.1-rc10 /arch
     def get_dir_contents(self, version, path):
-        entries_str =  decode(self.script('get-dir', self.version_to_tag(version), path))
+        entries_str = decode(self.script("get-dir", self.version_to_tag(version), path))
         return entries_str.split("\n")[:-1]
 
     # Returns indexed versions, as a tree of OrderedDict.
@@ -145,7 +149,7 @@ class Query:
         versions = OrderedDict()
 
         for _, version, _ in self.versions_cmd():
-            m = re.match(r'^(v\d+)\.\d+', version)
+            m = re.match(r"^(v\d+)\.\d+", version)
             topmenu = m.group(1)
             submenu = m.group(0)
 
@@ -161,7 +165,6 @@ class Query:
         # TODO: make query in self
         return self.db.version_tag.get(version)
 
-
     # Returns the type (blob or tree) associated to
     # the given path. Example:
     # > ./query.py type v3.1-rc10 /Makefile
@@ -169,21 +172,23 @@ class Query:
     # > ./query.py type v3.1-rc10 /arch
     # tree
     def get_file_type(self, version, path):
-        return decode(self.script('get-type', self.version_to_tag(version), path)).strip()
+        return decode(
+            self.script("get-type", self.version_to_tag(version), path)
+        ).strip()
 
     # Returns identifier search results
     def search_ident(self, version, ident, family):
         # DT bindings compatible strings are handled differently
-        if family == 'B':
+        if family == "B":
             return self.get_idents_comps(version, ident)
         else:
             return self.get_idents_defs(version, ident, family)
 
     def versions_cmd(self):
-        for line in self.scriptLines('versions'):
+        for line in self.scriptLines("versions"):
             line = decode(line)
             # unpack to trigger error on invalid format
-            tag, version, is_rc = line.split('\t')
+            tag, version, is_rc = line.split("\t")
             yield (tag, version, bool(is_rc))
 
     # Returns the latest tag that is included in the database.
@@ -192,11 +197,10 @@ class Query:
         for _, version, tag_is_rc in self.versions_cmd():
             if rc or not tag_is_rc:
                 return version
-        raise ValueError('could not find latest version')
-
+        raise ValueError("could not find latest version")
 
     def get_file_raw(self, version, path):
-        return decode(self.script('get-file', self.version_to_tag(version), path))
+        return decode(self.script("get-file", self.version_to_tag(version), path))
 
     def get_idents_comps(self, version, ident):
 
@@ -224,9 +228,9 @@ class Query:
 
         comps_idx, comps_lines, comps_family = next(comps)
         comps_docs_idx, comps_docs_lines, comps_docs_family = next(comps_docs)
-        compsCBuf = [] # C/CPP/ASM files
-        compsDBuf = [] # DT files
-        compsBBuf = [] # DT bindings docs files
+        compsCBuf = []  # C/CPP/ASM files
+        compsDBuf = []  # DT files
+        compsBBuf = []  # DT bindings docs files
 
         for file_idx, file_path in files_this_version:
             while comps_idx < file_idx:
@@ -236,16 +240,16 @@ class Query:
                 comps_docs_idx, comps_docs_lines, comps_docs_family = next(comps_docs)
 
             if comps_idx == file_idx:
-                if comps_family == 'C':
+                if comps_family == "C":
                     compsCBuf.append((file_path, comps_lines))
-                elif comps_family == 'D':
+                elif comps_family == "D":
                     compsDBuf.append((file_path, comps_lines))
 
             if comps_docs_idx == file_idx:
                 compsBBuf.append((file_path, comps_docs_lines))
 
         for path, cline in sorted(compsCBuf):
-            symbol_c.append(SymbolInstance(path, cline, 'compatible'))
+            symbol_c.append(SymbolInstance(path, cline, "compatible"))
 
         for path, dlines in sorted(compsDBuf):
             symbol_dts.append(SymbolInstance(path, dlines))
@@ -306,16 +310,19 @@ class Query:
 
             # Copy information about this identifier into dBuf, rBuf, and docBuf.
             while def_idx == file_idx:
-                if (def_family == family or family == 'A'
-                    or lib.compatibleMacro(macros_this_ident, family)):
+                if (
+                    def_family == family
+                    or family == "A"
+                    or lib.compatibleMacro(macros_this_ident, family)
+                ):
                     dBuf.append((file_path, def_type, def_line))
                 def_idx, def_type, def_line, def_family = next(defs_this_ident)
 
             if ref_idx == file_idx:
-                if lib.compatibleFamily(family, ref_family) or family == 'A':
+                if lib.compatibleFamily(family, ref_family) or family == "A":
                     rBuf.append((file_path, ref_lines))
 
-            if doc_idx == file_idx: # TODO should this be a `while`?
+            if doc_idx == file_idx:  # TODO should this be a `while`?
                 docBuf.append((file_path, doc_line))
 
         # Sort dBuf by path name before sorting by type in the loop
@@ -331,4 +338,3 @@ class Query:
             symbol_doccomments.append(SymbolInstance(path, docline))
 
         return symbol_definitions, symbol_references, symbol_doccomments, True
-

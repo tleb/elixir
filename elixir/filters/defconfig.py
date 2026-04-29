@@ -1,5 +1,12 @@
 import re
-from .utils import Filter, FilterContext, encode_number, decode_number, extension_matches
+
+from .utils import (
+    Filter,
+    FilterContext,
+    decode_number,
+    encode_number,
+)
+
 
 # Filter for kconfig identifier in defconfigs
 # Replaces defconfig identifiers with links to definitions/references
@@ -11,20 +18,23 @@ class DefConfigIdentsFilter(Filter):
         self.defconfigidents = []
 
     def check_if_applies(self, ctx) -> bool:
-        return super().check_if_applies(ctx) and \
-                ctx.filepath.endswith('defconfig')
+        return super().check_if_applies(ctx) and ctx.filepath.endswith("defconfig")
 
     def transform_raw_code(self, ctx, code: str) -> str:
         def keep_defconfigidents(m):
             self.defconfigidents.append(m.group(1))
-            return '__KEEPDEFCONFIGIDENTS__' + encode_number(len(self.defconfigidents))
+            return "__KEEPDEFCONFIGIDENTS__" + encode_number(len(self.defconfigidents))
 
-        return re.sub('(CONFIG_[\w]+)', keep_defconfigidents, code, flags=re.MULTILINE)
+        return re.sub("(CONFIG_[\w]+)", keep_defconfigidents, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_defconfigidents(m):
             i = self.defconfigidents[decode_number(m.group(1)) - 1]
-            return f'<a class="ident" href="{ ctx.get_ident_url(i, "K") }">{ i }</a>'
+            return f'<a class="ident" href="{ctx.get_ident_url(i, "K")}">{i}</a>'
 
-        return re.sub('__KEEPDEFCONFIGIDENTS__([A-J]+)', replace_defconfigidents, html, flags=re.MULTILINE)
-
+        return re.sub(
+            "__KEEPDEFCONFIGIDENTS__([A-J]+)",
+            replace_defconfigidents,
+            html,
+            flags=re.MULTILINE,
+        )

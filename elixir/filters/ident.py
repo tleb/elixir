@@ -1,5 +1,7 @@
 import re
-from .utils import Filter, FilterContext, encode_number, decode_number
+
+from .utils import Filter, FilterContext, decode_number, encode_number
+
 
 # Filter for identifier links
 # Replaces identifiers marked by Query.get_tokenized_file() with links to ident page.
@@ -16,15 +18,18 @@ class IdentFilter(Filter):
     def transform_raw_code(self, ctx, code: str) -> str:
         def sub_func(m):
             self.idents.append(m.group(1))
-            return '__KEEPIDENTS__' + encode_number(len(self.idents))
+            return "__KEEPIDENTS__" + encode_number(len(self.idents))
 
-        return re.sub('\033\[31m(?!CONFIG_)(.*?)\033\[0m', sub_func, code, flags=re.MULTILINE)
+        return re.sub(
+            "\033\[31m(?!CONFIG_)(.*?)\033\[0m", sub_func, code, flags=re.MULTILINE
+        )
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def sub_func(m):
             i = self.idents[decode_number(m.group(2)) - 1]
-            link = f'<a class="ident" href="{ ctx.get_ident_url(i) }">{ i }</a>'
-            return str(m.group(1) or '') + link
+            link = f'<a class="ident" href="{ctx.get_ident_url(i)}">{i}</a>'
+            return str(m.group(1) or "") + link
 
-        return re.sub('__(<.+?>)?KEEPIDENTS__([A-J]+)', sub_func, html, flags=re.MULTILINE)
-
+        return re.sub(
+            "__(<.+?>)?KEEPIDENTS__([A-J]+)", sub_func, html, flags=re.MULTILINE
+        )

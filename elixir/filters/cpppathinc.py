@@ -1,9 +1,17 @@
 import re
 from typing import List
-from .utils import Filter, FilterContext, encode_number, decode_number, extension_matches
+
+from .utils import (
+    Filter,
+    FilterContext,
+    decode_number,
+    encode_number,
+    extension_matches,
+)
 
 # Filters for cpp includes like these:
 # #include <file>
+
 
 # Such filters work typically for standalone projects (like kernels and bootloaders)
 # If we make references to other projects, we could
@@ -18,23 +26,26 @@ class CppPathIncFilter(Filter):
         self.cpppathinc = []
 
     def check_if_applies(self, ctx) -> bool:
-        return super().check_if_applies(ctx) and \
-                extension_matches(ctx.filepath, {'dts', 'dtsi', 'c', 'cc', 'cpp', 'c++', 'cxx', 'h', 's'})
+        return super().check_if_applies(ctx) and extension_matches(
+            ctx.filepath, {"dts", "dtsi", "c", "cc", "cpp", "c++", "cxx", "h", "s"}
+        )
 
     def transform_raw_code(self, ctx, code: str) -> str:
         def keep_cpppathinc(m):
             m1 = m.group(1)
             m2 = m.group(2)
             inc = m.group(3)
-            if re.match('^asm/.*', inc):
+            if re.match("^asm/.*", inc):
                 # Keep the original string in case the path contains "asm/"
                 # Because there are then multiple include possibilites, one per architecture
                 return m.group(0)
             else:
                 self.cpppathinc.append(inc)
-                return f'{ m1 }#include{ m2 }<__KEEPCPPPATHINC__{ encode_number(len(self.cpppathinc)) }>'
+                return f"{m1}#include{m2}<__KEEPCPPPATHINC__{encode_number(len(self.cpppathinc))}>"
 
-        return re.sub('^(\s*)#include(\s*)<(.*?)>', keep_cpppathinc, code, flags=re.MULTILINE)
+        return re.sub(
+            "^(\s*)#include(\s*)<(.*?)>", keep_cpppathinc, code, flags=re.MULTILINE
+        )
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_cpppathinc(m):
@@ -42,8 +53,9 @@ class CppPathIncFilter(Filter):
             for p in self.prefix_path:
                 path = f"/{p}/{w}"
                 if ctx.query.file_exists(ctx.tag, path):
-                    return f'<a href="{ ctx.get_absolute_source_url(path) }">{ w }</a>'
+                    return f'<a href="{ctx.get_absolute_source_url(path)}">{w}</a>'
             return w
 
-        return re.sub('__KEEPCPPPATHINC__([A-J]+)', replace_cpppathinc, html, flags=re.MULTILINE)
-
+        return re.sub(
+            "__KEEPCPPPATHINC__([A-J]+)", replace_cpppathinc, html, flags=re.MULTILINE
+        )

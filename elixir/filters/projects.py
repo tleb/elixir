@@ -1,27 +1,20 @@
-from .ident import IdentFilter
-
+from .configin import ConfigInFilter
 from .cppinc import CppIncFilter
 from .cpppathinc import CppPathIncFilter
-
 from .defconfig import DefConfigIdentsFilter
-from .configin import ConfigInFilter
-
+from .dtscompcode import DtsCompCodeFilter
+from .dtscompdocs import DtsCompDocsFilter
+from .dtscompdts import DtsCompDtsFilter
+from .dtsi import DtsiFilter
+from .ident import IdentFilter
 from .kconfig import KconfigFilter
 from .kconfigidents import KconfigIdentsFilter
-
-from .dtsi import DtsiFilter
-from .dtscompdocs import DtsCompDocsFilter
-from .dtscompcode import DtsCompCodeFilter
-from .dtscompdts import DtsCompDtsFilter
-
-from .makefileo import MakefileOFilter
-from .makefiledtb import MakefileDtbFilter
 from .makefiledir import MakefileDirFilter
-from .makefilesubdir import MakefileSubdirFilter
+from .makefiledtb import MakefileDtbFilter
 from .makefilefile import MakefileFileFilter
+from .makefileo import MakefileOFilter
 from .makefilesrctree import MakefileSrcTreeFilter
 from .makefilesubdir import MakefileSubdirFilter
-
 
 # List of filters applied to all projects
 default_filters = [
@@ -57,69 +50,71 @@ common_makefile_filters = [
 # (FilterCls, {"option": True}).
 # Check filter files and utils.py for information about available options
 project_filters = {
-    'amazon-freertos': [
+    "amazon-freertos": [
         *default_filters,
         MakefileSubdirFilter,
     ],
-    'arm-trusted-firmware': [
+    "arm-trusted-firmware": [
         *default_filters,
         CppPathIncFilter,
     ],
-    'barebox': [
+    "barebox": [
         *default_filters,
         DtsiFilter,
         *common_kconfig_filters,
         CppPathIncFilter,
         *common_makefile_filters,
     ],
-    'coreboot': [
+    "coreboot": [
         *default_filters,
         DtsiFilter,
         *common_kconfig_filters,
         *common_makefile_filters,
     ],
-    'iproute2': [
+    "iproute2": [
         *default_filters,
         *common_makefile_filters,
     ],
-    'linux': [
+    "linux": [
         *default_filters,
         DtsiFilter,
         *common_kconfig_filters,
         *common_makefile_filters,
         # include/uapi contains includes to user headers under #ifndef __KERNEL__
         # Our solution is to ignore all includes in such paths
-        (CppPathIncFilter, {"path_exceptions": {'^/include/uapi/.*'}}),
+        (CppPathIncFilter, {"path_exceptions": {"^/include/uapi/.*"}}),
     ],
-    'opensbi': [
+    "opensbi": [
         *default_filters,
         *common_kconfig_filters,
     ],
-    'qemu': [
+    "qemu": [
         *default_filters,
         *common_kconfig_filters,
     ],
-    'u-boot': [
+    "u-boot": [
         *default_filters,
         DtsiFilter,
         *common_kconfig_filters,
         CppPathIncFilter,
         *common_makefile_filters,
     ],
-    'uclibc-ng': [
+    "uclibc-ng": [
         *default_filters,
         ConfigInFilter,
     ],
-    'vpp': [
+    "vpp": [
         *default_filters,
-        (CppPathIncFilter, {"prefix_path": ['src', 'src/plugins', 'src/vpp-api', 'src/vpp-api/vapi']}),
+        (
+            CppPathIncFilter,
+            {"prefix_path": ["src", "src/plugins", "src/vpp-api", "src/vpp-api/vapi"]},
+        ),
         MakefileFileFilter,
     ],
-    'zephyr': [
+    "zephyr": [
         *default_filters,
         DtsiFilter,
         *common_kconfig_filters,
         CppPathIncFilter,
     ],
 }
-

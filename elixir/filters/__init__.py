@@ -1,7 +1,8 @@
 from typing import List
 
+from .projects import default_filters, project_filters
 from .utils import Filter, FilterContext
-from .projects import project_filters, default_filters
+
 
 # Returns a list of applicable filters for project_name under provided filter context
 def get_filters(ctx: FilterContext, project_name: str) -> List[Filter]:
@@ -15,9 +16,10 @@ def get_filters(ctx: FilterContext, project_name: str) -> List[Filter]:
         elif type(filter_cls) == type:
             filters.append(filter_cls())
         else:
-            raise ValueError(f"Invalid filter: {filter_cls}, " \
-                    "should be either a two element tuple or a type. " \
-                    "Make sure project_filters in project.py is valid.")
+            raise ValueError(
+                f"Invalid filter: {filter_cls}, "
+                "should be either a two element tuple or a type. "
+                "Make sure project_filters in project.py is valid."
+            )
 
     return [f for f in filters if f.check_if_applies(ctx)]
-

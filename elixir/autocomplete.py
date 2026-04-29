@@ -17,40 +17,39 @@
 #  You should have received a copy of the GNU Affero General Public License
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
-import sys
-import os
-import json
 from urllib import parse
-from berkeleydb.db import DB_SET_RANGE
+
 import falcon
+from berkeleydb.db import DB_SET_RANGE
 
 from .lib import autoBytes, validFamily
 from .query import get_query
-from .web_utils import validate_project, validate_ident
+from .web_utils import validate_ident, validate_project
+
 
 class AutocompleteResource:
     def on_get(self, req, resp):
-        ident_prefix = req.get_param('q')
-        family = req.get_param('f')
-        project = req.get_param('p')
+        ident_prefix = req.get_param("q")
+        family = req.get_param("f")
+        project = req.get_param("p")
 
         ident_prefix = validate_ident(ident_prefix)
         if ident_prefix is None:
-            raise falcon.HTTPInvalidParam('', 'ident')
+            raise falcon.HTTPInvalidParam("", "ident")
 
         project = validate_project(project)
         if project is None:
-            raise falcon.HTTPInvalidParam('', 'project')
+            raise falcon.HTTPInvalidParam("", "project")
 
         if not validFamily(family):
-            family = 'C'
+            family = "C"
 
         query = get_query(req.context.config.project_dir, project)
         if not query:
             resp.status = falcon.HTTP_NOT_FOUND
             return
 
-        if family == 'B':
+        if family == "B":
             # DTS identifiers are stored quoted
             process = lambda x: parse.unquote(x)
             db = query.db.comps
@@ -85,4 +84,3 @@ class AutocompleteResource:
         resp.media = response
 
         query.close()
-

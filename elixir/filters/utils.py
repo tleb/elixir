@@ -1,8 +1,10 @@
-import re
 import os
+import re
 from dataclasses import dataclass
 from typing import Callable, List
+
 from ..query import Query
+
 
 # Context data used by Filters
 # tag: browsed version, unqoted
@@ -20,6 +22,7 @@ class FilterContext:
     get_ident_url: Callable[[str], str]
     get_absolute_source_url: Callable[[str], str]
     get_relative_source_url: Callable[[str], str]
+
 
 # Filter interface/base class
 # Filters are used to add extra information, like links, to code formatted into HTML by Pygments.
@@ -59,6 +62,7 @@ def filename_without_ext_matches(filepath: str, allowed_filenames_without_ext) -
     filename_without_ext, _ = os.path.splitext(filename)
     return filename_without_ext in allowed_filenames_without_ext
 
+
 # Returns true if extension of filename from filepath is in the
 # allowed_extensions iterable
 def extension_matches(filepath: str, allowed_extensions) -> bool:
@@ -70,24 +74,24 @@ def extension_matches(filepath: str, allowed_extensions) -> bool:
 # Encodes an integer into a string of characters (A-J)
 # encode_number(10239) = 'BACDJ'
 def encode_number(number):
-    result = ''
+    result = ""
 
     while number != 0:
         number, rem = divmod(number, 10)
-        rem = chr(ord('A') + rem)
+        rem = chr(ord("A") + rem)
         result = rem + result
 
     return result
 
+
 # Decodes a string of characters returned by encode_number into an integer
 # decode_number('BACDJ') = 10239
 def decode_number(string):
-    result = ''
+    result = ""
 
-    while string != '':
+    while string != "":
         string, char = string[:-1], string[-1]
-        char = str(ord(char) - ord('A'))
+        char = str(ord(char) - ord("A"))
         result = char + result
 
     return int(result)
-

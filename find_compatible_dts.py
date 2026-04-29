@@ -20,14 +20,16 @@
 
 import re
 from urllib import parse
+
 from elixir.lib import decode
+
 
 class FindCompatibleDTS:
     def __init__(self):
         # Compile regexes
-        self.regex_c = re.compile("\s*{*\s*\.compatible\s*=\s*\"(.+?)\"")
+        self.regex_c = re.compile('\s*{*\s*\.compatible\s*=\s*"(.+?)"')
         self.regex_dts1 = re.compile("\s*compatible")
-        self.regex_dts2 = re.compile("\"(.+?)\"")
+        self.regex_dts2 = re.compile('"(.+?)"')
         self.regex_bindings = re.compile("([\w-]+,?[\w-]+)")
 
     def parse_c(self, content):
@@ -51,15 +53,14 @@ class FindCompatibleDTS:
         # Iterate though lines and search for idents
         for num, line in enumerate(file_lines, 1):
             line = decode(line)
-            if family == 'C':
+            if family == "C":
                 ret = self.parse_c(line)
-            elif family == 'D':
+            elif family == "D":
                 ret = self.parse_dts(line)
-            elif family == 'B':
+            elif family == "B":
                 ret = self.parse_bindings(line)
 
             for i in range(len(ret)):
-                ident_list.append(str(parse.quote(ret[i])) + ' ' + str(num))
+                ident_list.append(str(parse.quote(ret[i])) + " " + str(num))
 
         return ident_list
-

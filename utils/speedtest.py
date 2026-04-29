@@ -17,47 +17,51 @@
 #  You should have received a copy of the GNU Affero General Public License
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
-from time import time
 import os
 import sys
+from time import time
 
-BOLD = '\033[1m'
-NORMAL = '\033[0m'
+BOLD = "\033[1m"
+NORMAL = "\033[0m"
 
-ELIXIR_DIR = os.path.dirname(__file__) + '/..'
-sys.path = [ ELIXIR_DIR ] + sys.path
+ELIXIR_DIR = os.path.dirname(__file__) + "/.."
+sys.path = [ELIXIR_DIR] + sys.path
 
-#Parameters
+# Parameters
 run_number = 100
 verbose = False
 
-#List of test elements
-project = 'linux'
-versions = ['latest', 'v5.6.2']
-idents = [  ('loopback', 'C'),
-            ('devm_register_reboot_notifier', 'C'),
-            ('notrace', 'C'),
-            ('arch_local_irq_restore', 'C'),
-            ('blk_queue_dma_alignment', 'C'),
-            ('spinlock_t', 'C'),
-            ('max', 'C'),
-            ('task_struct', 'C'),
-            ('eth_header', 'C'),
-            ('sk_buff', 'C') ]
+# List of test elements
+project = "linux"
+versions = ["latest", "v5.6.2"]
+idents = [
+    ("loopback", "C"),
+    ("devm_register_reboot_notifier", "C"),
+    ("notrace", "C"),
+    ("arch_local_irq_restore", "C"),
+    ("blk_queue_dma_alignment", "C"),
+    ("spinlock_t", "C"),
+    ("max", "C"),
+    ("task_struct", "C"),
+    ("eth_header", "C"),
+    ("sk_buff", "C"),
+]
 
-files = [   '/block/partitions/osf.c',
-            '/mm/kasan/quarantine.c',
-            '/include/crypto/internal/hash.h',
-            '/drivers/gpu/drm/gma500/gma_display.c',
-            '/drivers/hwmon/pmbus/ltc2978.c',
-            '/virt/lib/irqbypass.c',
-            '/Makefile',
-            '/fs/btrfs/tree-checker.c',
-            '/kernel/locking/qspinlock_stat.h',
-            '/arch/arm/boot/dts/armada-375.dtsi' ]
+files = [
+    "/block/partitions/osf.c",
+    "/mm/kasan/quarantine.c",
+    "/include/crypto/internal/hash.h",
+    "/drivers/gpu/drm/gma500/gma_display.c",
+    "/drivers/hwmon/pmbus/ltc2978.c",
+    "/virt/lib/irqbypass.c",
+    "/Makefile",
+    "/fs/btrfs/tree-checker.c",
+    "/kernel/locking/qspinlock_stat.h",
+    "/arch/arm/boot/dts/armada-375.dtsi",
+]
 
 
-#Test results
+# Test results
 idents_results = []
 idents_max = 0
 idents_min = 0
@@ -70,49 +74,53 @@ files_average = 0
 
 
 def init_query(project):
-    if 'LXR_PROJ_DIR' not in os.environ:
+    if "LXR_PROJ_DIR" not in os.environ:
         print("ERROR : LXR_PROJ_DIR not defined !")
-        return None;
+        return None
 
-    basedir = os.environ['LXR_PROJ_DIR']
-    datadir = basedir + '/' + project + '/data'
-    repodir = basedir + '/' + project + '/repo'
+    basedir = os.environ["LXR_PROJ_DIR"]
+    datadir = basedir + "/" + project + "/data"
+    repodir = basedir + "/" + project + "/repo"
 
     from elixir.query import Query
+
     return Query(datadir, repodir)
 
 
 def get_ident(query, ident, version):
-    if version == ('latest', 'latest-rc'):
-        rc = version == 'latest'
+    if version == ("latest", "latest-rc"):
+        rc = version == "latest"
         version = query.get_latest_tag(rc=rc)
 
     return query.search_ident(version, ident[0], ident[1])
 
+
 def get_file(query, path, version):
-    if version == ('latest', 'latest-rc'):
-        rc = version == 'latest'
+    if version == ("latest", "latest-rc"):
+        rc = version == "latest"
         version = query.get_latest_tag(rc=rc)
 
     return query.get_file(version, path)
 
 
-#Read arguments
+# Read arguments
 if len(sys.argv) > 1:
-    if sys.argv[1] == '-v':
+    if sys.argv[1] == "-v":
         verbose = True
-    elif sys.argv[1] == '-h':
-        print("LXR_PROJ_DIR needs to be set before launching this script\n" +
-                "Options :\n" +
-                "-v     Verbose mode (Show requests details)")
+    elif sys.argv[1] == "-h":
+        print(
+            "LXR_PROJ_DIR needs to be set before launching this script\n"
+            + "Options :\n"
+            + "-v     Verbose mode (Show requests details)"
+        )
         exit()
 
-#Query init
+# Query init
 query = init_query(project)
 if query == None:
     exit()
 
-#Database test
+# Database test
 print((BOLD + "Database test for project {}" + NORMAL).format(project))
 
 print("Each test runs {} times".format(run_number))
@@ -127,22 +135,33 @@ for version in versions:
             get_ident(query, ident, version)
             end_time = time()
 
-            elapsed_time = (end_time - start_time)*1000 #convert to ms
+            elapsed_time = (end_time - start_time) * 1000  # convert to ms
             idents_results.append(elapsed_time)
 
             if verbose:
                 print("Identifier : {}".format(ident))
                 print("Elapsed time : {0:.6f} ms\n".format(elapsed_time))
 
-
     idents_min = min(idents_results)
     idents_max = max(idents_results)
-    idents_average = sum(idents_results)/len(idents_results)
+    idents_average = sum(idents_results) / len(idents_results)
 
-    print((BOLD + "Min:" + NORMAL + " {0:.6f} ms\n"
-            + BOLD + "Max:" + NORMAL + " {1:.6f} ms\n"
-            + BOLD + "Average:" + NORMAL + " {2:.6f} ms\n"
-            ).format(idents_min, idents_max, idents_average))
+    print(
+        (
+            BOLD
+            + "Min:"
+            + NORMAL
+            + " {0:.6f} ms\n"
+            + BOLD
+            + "Max:"
+            + NORMAL
+            + " {1:.6f} ms\n"
+            + BOLD
+            + "Average:"
+            + NORMAL
+            + " {2:.6f} ms\n"
+        ).format(idents_min, idents_max, idents_average)
+    )
 
     print(BOLD + "Files access test\n" + NORMAL)
     for i in range(run_number):
@@ -151,19 +170,30 @@ for version in versions:
             get_file(query, file, version)
             end_time = time()
 
-            elapsed_time = (end_time - start_time) * 1000 #convert to ms
+            elapsed_time = (end_time - start_time) * 1000  # convert to ms
             files_results.append(elapsed_time)
 
             if verbose:
                 print("File : {}".format(file))
                 print("Elapsed time : {0:.6f} ms\n".format(elapsed_time))
 
-
     files_min = min(files_results)
     files_max = max(files_results)
-    files_average = sum(files_results)/len(files_results)
+    files_average = sum(files_results) / len(files_results)
 
-    print((BOLD + "Min:" + NORMAL + " {0:.6f} ms\n"
-            + BOLD + "Max:" + NORMAL + " {1:.6f} ms\n"
-            + BOLD + "Average:" + NORMAL + " {2:.6f} ms\n"
-            ).format(files_min, files_max, files_average))
+    print(
+        (
+            BOLD
+            + "Min:"
+            + NORMAL
+            + " {0:.6f} ms\n"
+            + BOLD
+            + "Max:"
+            + NORMAL
+            + " {1:.6f} ms\n"
+            + BOLD
+            + "Average:"
+            + NORMAL
+            + " {2:.6f} ms\n"
+        ).format(files_min, files_max, files_average)
+    )
