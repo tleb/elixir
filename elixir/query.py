@@ -123,17 +123,18 @@ class Query:
     #
     # TODO: we could do better than this now. We can do a lookup by blobid for all defs/refs.
     def get_tokenized_file(self, version, path):
+        tag = self.version_to_tag(version)
         filename = os.path.basename(path)
         family = lib.getFileFamily(filename)
 
         if family is None:
-            return decode(self.script("get-file", version, path))
+            return decode(self.script("get-file", tag, path))
 
         even = True
         prefix = b"CONFIG_" if family == "K" else b""
         tokens = []
 
-        for tok in self.scriptLines("tokenize-file", version, path, family):
+        for tok in self.scriptLines("tokenize-file", tag, path, family):
             even = not even
             tokens.append((tok, prefix + tok, even))
 
