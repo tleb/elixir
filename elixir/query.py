@@ -87,7 +87,8 @@ class Query:
     # Check if a dts compatible string exists
     def dts_comp_exists(self, ident):
         if self.dts_comp_support:
-            raise NotImplementedError
+            QUERY = "SELECT 1 FROM defs WHERE defname = ? AND deftype = 'compatible' LIMIT 1;"
+            return self.ddb.execute(QUERY, (ident,)).fetchone() is not None
         else:
             return False
 
@@ -198,7 +199,44 @@ class Query:
     def search_ident(self, version, ident, family):
         # DT bindings compatible strings are handled differently
         if family == "B":
-            return self.get_idents_comps(version, ident)
+            versionid = self.maybe_versionname_to_versionid(version)
+            if versionid is None:
+                return [], [], [], False
+
+            defs = self.ddb.execute(
+                """
+                SELECT vo.filepath, d.defline
+                FROM defs d
+                INNER JOIN version_objects vo ON d.blobid = vo.blobid
+                WHERE d.defname = ? AND vo.versionid = ? AND d.deftype = 'compatible'
+            """,
+                (ident, versionid),
+            ).fetchall()
+            symbol_definitions = [SymbolInstance(p, l, "compatible") for p, l in defs]
+
+            dts_refs = self.ddb.execute(
+                """
+                SELECT vo.filepath, r.refline
+                FROM refs r
+                INNER JOIN version_objects vo ON r.blobid = vo.blobid
+                WHERE r.refname = ? AND vo.versionid = ? AND r.blobfamily = 'D'
+            """,
+                (ident, versionid),
+            ).fetchall()
+            symbol_references = [SymbolInstance(p, l) for p, l in dts_refs]
+
+            docs_refs = self.ddb.execute(
+                """
+                SELECT vo.filepath, r.refline
+                FROM refs r
+                INNER JOIN version_objects vo ON r.blobid = vo.blobid
+                WHERE r.refname = ? AND vo.versionid = ? AND r.blobfamily = 'B'
+            """,
+                (ident, versionid),
+            ).fetchall()
+            symbol_doccomments = [SymbolInstance(p, l) for p, l in docs_refs]
+
+            return symbol_definitions, symbol_references, symbol_doccomments, True
         else:
             return self.get_idents_defs(version, ident, family)
 
@@ -221,9 +259,6 @@ class Query:
 
     def get_file_raw(self, version, path):
         return decode(self.script("get-file", self.version_to_tag(version), path))
-
-    def get_idents_comps(self, version, ident):
-        raise NotImplementedError
 
     def def_exists_in_db(self, defname):
         assert isinstance(defname, str)  # bytes wouldn't work
