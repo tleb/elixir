@@ -404,6 +404,105 @@ def stage05_worker(args):
     )
 
 
+def stage06_fill_comps_defs(ddb, start_blobid, end_blobid, timer):
+    blobs = ddb.execute(
+        """SELECT blobid, blobhash, blobfilename, blobfamily FROM blobs
+           WHERE blobid >= ? AND blobid < ?
+             AND blobfamily = 'C';""",
+        (start_blobid, end_blobid),
+    ).fetchall()
+
+    timer.init_done()
+
+    QUERY = "INSERT INTO defs SELECT * FROM ddb_data"
+    pool_and_write_output_to_db(ddb, stage06_worker, blobs, QUERY)
+
+
+def stage06_worker(args):
+    blobid, blobhash, blobfilename, blobfamily = args
+    compnames, complines = [], []
+    lines = lib.scriptLines("parse-comps", blobhash, blobfamily)
+    for line in lines:
+        ident, lineno = line.split(b" ", 1)
+        compnames.append(ident.decode())
+        complines.append(int(lineno.decode()))
+    if compnames:
+        return pd.DataFrame(
+            {
+                "defname": compnames,
+                "blobid": blobid,
+                "deftype": ["compatible"] * len(compnames),
+                "defline": complines,
+                "blobfamily": pd.Series([blobfamily], dtype=BLOBFAMILY_DTYPE).repeat(
+                    len(compnames)
+                ),
+            }
+        )
+    return None
+
+
+stage07_all_compnames = None
+
+
+def stage07_fill_comps_refs(ddb, start_blobid, end_blobid, timer):
+    global stage07_all_compnames
+
+    dts_blobs = ddb.execute(
+        """SELECT blobid, blobhash, blobfamily FROM blobs
+           WHERE blobid >= ? AND blobid < ?
+             AND blobfamily = 'D';""",
+        (start_blobid, end_blobid),
+    ).fetchall()
+
+    docs_blobs = ddb.execute(
+        """SELECT DISTINCT b.blobid, b.blobhash, 'B' FROM blobs b
+           INNER JOIN version_objects vo ON b.blobid = vo.blobid
+           WHERE vo.filepath LIKE 'Documentation/devicetree/bindings/%'
+             AND b.blobid >= ? AND b.blobid < ?;""",
+        (start_blobid, end_blobid),
+    ).fetchall()
+
+    stage07_all_compnames = set(
+        x
+        for (x,) in ddb.execute(
+            "SELECT DISTINCT defname FROM defs WHERE deftype = 'compatible'"
+        ).fetchall()
+    )
+
+    timer.init_done()
+
+    all_blobs = dts_blobs + docs_blobs
+    QUERY = "INSERT INTO refs SELECT * FROM ddb_data"
+    pool_and_write_output_to_db(ddb, stage07_worker, all_blobs, QUERY)
+
+
+def stage07_worker(args):
+    global stage07_all_compnames
+
+    blobid, blobhash, blobfamily = args
+    refnames, reflines = [], []
+    lines = lib.scriptLines("parse-comps", blobhash, blobfamily)
+    for line in lines:
+        ident, lineno = line.split(b" ", 1)
+        ident = ident.decode()
+        if ident not in stage07_all_compnames:
+            continue
+        refnames.append(ident)
+        reflines.append(int(lineno.decode()))
+    if refnames:
+        return pd.DataFrame(
+            {
+                "refname": refnames,
+                "blobid": blobid,
+                "blobfamily": pd.Series([blobfamily], dtype=BLOBFAMILY_DTYPE).repeat(
+                    len(refnames)
+                ),
+                "refline": reflines,
+            }
+        )
+    return None
+
+
 def print_row(label, total_wallclock, init_wallclock, cpu_self, cpu_children):
     print(
         f"{label:20s} {total_wallclock:>15s} {init_wallclock:>15s} {cpu_self:>15s} {cpu_children:>15s}"
@@ -469,6 +568,10 @@ def main():
             stage04_fill_defs_table(ddb, start_blobid, end_blobid, timer)
         with Section("refs") as timer:
             stage05_fill_refs_table(ddb, start_blobid, end_blobid, timer)
+        with Section("comps-defs") as timer:
+            stage06_fill_comps_defs(ddb, start_blobid, end_blobid, timer)
+        with Section("comps-refs") as timer:
+            stage07_fill_comps_refs(ddb, start_blobid, end_blobid, timer)
 
 
 if __name__ == "__main__":
