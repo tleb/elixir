@@ -19,7 +19,6 @@
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
 import re
-from urllib import parse
 
 from elixir.lib import decode
 
@@ -61,6 +60,16 @@ class FindCompatibleDTS:
                 ret = self.parse_bindings(line)
 
             for i in range(len(ret)):
-                ident_list.append(str(parse.quote(ret[i])) + " " + str(num))
+                ident_list.append(ret[i] + " " + str(num))
 
         return ident_list
+
+
+if __name__ == "__main__":
+    import sys
+
+    f = FindCompatibleDTS()
+    with open(sys.argv[1], "rb") as fh:
+        results = f.run(fh, sys.argv[2])
+    for r in results:
+        print(r)
