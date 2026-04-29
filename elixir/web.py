@@ -713,13 +713,13 @@ DirectoryEntry = namedtuple("DirectoryEntry", "type, name, path, url, size")
 
 # Returns a list of DirectoryEntry objects with information about files in a directory
 # base_url: file URLs will be created by appending file path to this URL. It shouldn't end with a slash
-# tag: requested repository tag
+# version: requested version
 # path: path to the directory in the repository
 def get_directory_entries(
-    q: Query, base_url, tag: str, path: str
+    q: Query, base_url, version: str, path: str
 ) -> list[DirectoryEntry]:
     dir_entries = []
-    lines = q.get_dir_contents(tag, path)
+    lines = q.get_dir_contents(version, path)
 
     for l in lines:
         type, name, size, perm = l.split(" ")
@@ -733,7 +733,7 @@ def get_directory_entries(
             # 120000 permission means it's a symlink
             if perm == "120000":
                 dir_path = path if path.endswith("/") else path + "/"
-                link_contents = q.get_file_raw(tag, file_path)
+                link_contents = q.get_file_raw(version, file_path)
                 link_target_path = os.path.abspath(dir_path + link_contents)
 
                 dir_entries.append(
