@@ -30,7 +30,7 @@ class MakefileDirFilter(Filter):
             if filedir != "/":
                 filedir += "/"
 
-            if ctx.query.file_exists(ctx.tag, filedir + m.group(1) + "/Makefile"):
+            if ctx.query.file_exists(ctx.version, filedir + m.group(1) + "/Makefile"):
                 self.makefiledir.append(m.group(1))
                 return f"__KEEPMAKEFILEDIR__{encode_number(len(self.makefiledir))}/{m.group(2)}"
             else:

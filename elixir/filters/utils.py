@@ -7,7 +7,7 @@ from ..query import Query
 
 
 # Context data used by Filters
-# tag: browsed version, unqoted
+# version: browsed version, unquoted
 # family: family of file
 # path: path of file
 # get_ident_url: function that returns URL to identifier passed as argument
@@ -16,7 +16,7 @@ from ..query import Query
 @dataclass
 class FilterContext:
     query: Query
-    tag: str
+    version: str
     family: str
     filepath: str
     get_ident_url: Callable[[str], str]
