@@ -1,20 +1,8 @@
-# Elixir definitions for OP-TEE Trusted OS
-
-list_tags_h()
+shiny_versions()
 {
-    echo "$tags" |
-    grep '^[0-9]\.' |
-    tac |
-    sed -r 's/^([0-9]*)\.([0-9]*)(.*)$/v\1 \1.\2 \1.\2\3/'
-}
-
-list_tags()
-{
-    echo "$tags" |
-    grep '^[0-9]\.'
-}
-
-get_latest_tags()
-{
-    git tag | grep '^[0-9]\.' | grep -v '\-rc' | sort -Vr
+    # Clean. Only one weird tag.
+    git tag --sort=-creatordate | awk '
+    $0 == "20160825-for-lmg" {next}
+    match($0, /^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$/, arr) {printf "%s\tv%s\t%d\n", $0, $0, !!arr[1]; next}
+    {exit 1}'
 }

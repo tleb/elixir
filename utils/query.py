@@ -2,7 +2,7 @@ from elixir.query import Query
 from elixir import lib
 
 def cmd_stats(q, **kwargs):
-    print("Versions: ", len(q.db.vers))
+    print("Versions: ", len(q.db.version_tag))
     print("Blobs: ", len(q.db.blob))
     if len(q.db.blob) != len(q.db.hash) or len(q.db.hash) != len(q.db.file):
         print("Warning, number of blobs, hashes or files is not equal")

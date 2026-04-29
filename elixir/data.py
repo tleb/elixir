@@ -193,6 +193,7 @@ class DB:
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), dir)
 
         ro = readonly
+        NOOP = lambda x: x
 
         self.vars = BsdDB(dir + '/variables.db', ro, lambda x: int(x.decode()), shared=shared)
             # Key-value store of basic information
@@ -202,10 +203,10 @@ class DB:
             # Map serial number back to hash
         self.file = BsdDB(dir + '/filenames.db', ro, lambda x: x.decode(), shared=shared)
             # Map serial number to filename
-        self.vers = BsdDB(dir + '/versions.db', ro, PathList, shared=shared)
+        self.version_blobs = BsdDB(dir + '/version-to-blobs.db', ro, PathList, shared=shared)
+        self.version_tag = BsdDB(dir + '/version-to-tag.db', ro, NOOP, shared=shared)
         self.defs = BsdDB(dir + '/definitions.db', ro, DefList, shared=shared)
         self.defs_cache = {}
-        NOOP = lambda x: x
         self.defs_cache['C'] = BsdDB(dir + '/definitions-cache-C.db', ro, NOOP, shared=shared)
         self.defs_cache['K'] = BsdDB(dir + '/definitions-cache-K.db', ro, NOOP, shared=shared)
         self.defs_cache['D'] = BsdDB(dir + '/definitions-cache-D.db', ro, NOOP, shared=shared)
@@ -224,7 +225,8 @@ class DB:
         self.blob.close()
         self.hash.close()
         self.file.close()
-        self.vers.close()
+        self.version_blobs.close()
+        self.version_tag.close()
         self.defs.close()
         self.defs_cache['C'].close()
         self.defs_cache['K'].close()

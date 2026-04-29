@@ -32,45 +32,9 @@ script_dir=`pwd`
 cd "$cur_dir"
 dts_comp_support=0 # DT bindings compatible strings support (disable by default)
 
-version_dir()
-{
-    cat;
-}
-
-version_rev()
-{
-    cat;
-}
-
-get_tags()
-{
-    git tag |
-    version_dir |
-    sed 's/$/.0/' |
-    sort -V |
-    sed 's/\.0$//'
-}
-
-list_tags()
-{
-    echo "$tags"
-}
-
-list_tags_h()
-{
-    echo "$tags" |
-    tac |
-    sed -r 's/^(v[0-9]*)\.([0-9]*)(.*)$/\1 \1.\2 \1.\2\3/'
-}
-
-get_latest_tags()
-{
-    git tag | version_dir | grep -v '\-rc' | sort -Vr
-}
-
 get_type()
 {
-    v=`echo $opt1 | version_rev`
+    v=`echo $opt1`
     git cat-file -t "$v:`denormalize $opt2`" 2>/dev/null
 }
 
@@ -81,13 +45,13 @@ get_blob()
 
 get_file()
 {
-    v=`echo $opt1 | version_rev`
+    v=`echo $opt1`
     git cat-file blob "$v:`denormalize $opt2`" 2>/dev/null
 }
 
 get_dir()
 {
-        v=`echo $opt1 | version_rev`
+        v=`echo $opt1`
         git ls-tree -l "$v:`denormalize $opt2`" 2>/dev/null |
         awk '{print $2" "$5" "$4" "$1}' |
         grep -v ' \.' |
@@ -99,7 +63,7 @@ tokenize_file()
     if [ "$opt1" = -b ]; then
         ref=$opt2
     else
-        v=`echo $opt1 | version_rev`
+        v=`echo $opt1`
         ref="$v:`denormalize $opt2`"
     fi
 
@@ -117,7 +81,7 @@ tokenize_file()
 
 list_blobs()
 {
-    v=`echo $opt2 | version_rev`
+    v=`echo $opt2`
 
     if [ "$opt1" = '-p' ]; then
         # "path" option: return blob hash and full path
@@ -128,7 +92,7 @@ list_blobs()
     else
         # default option: return only blob hash
         format='\1'
-        v=`echo $opt1 | version_rev`
+        v=`echo $opt1`
     fi
 
     git ls-tree -r "$v" |
@@ -237,18 +201,10 @@ denormalize()
 }
 
 case $cmd in
-    list-tags)
-        tags=`get_tags`
-
-        if [ "$opt1" = '-h' ]; then
-            list_tags_h
-        else
-            list_tags
-        fi
-        ;;
-
-    get-latest-tags)
-        get_latest_tags
+    versions)
+        set -e
+        shiny_versions
+        set +e
         ;;
 
     get-type)

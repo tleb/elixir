@@ -80,14 +80,14 @@ class UpdateIds(Thread):
         global new_idxes, tags_done, tag_ready
         self.index = 0
 
-        for tag in self.tag_buf:
+        for version in self.tag_buf:
 
-            new_idxes.append((self.update_blob_ids(tag), Event(), Event(), Event(), Event()))
+            new_idxes.append((self.update_blob_ids(version), Event(), Event(), Event(), Event()))
 
-            progress('ids: ' +  tag.decode() + ': ' + str(len(new_idxes[self.index][0])) +
+            progress('ids: ' +  version.decode() + ': ' + str(len(new_idxes[self.index][0])) +
                         ' new blobs', self.index+1)
 
-            new_idxes[self.index][1].set() # Tell that the tag is ready
+            new_idxes[self.index][1].set() # Tell that the version is ready
 
             self.index += 1
 
@@ -98,7 +98,7 @@ class UpdateIds(Thread):
         tags_done = True
         progress('ids: Thread finished', self.index)
 
-    def update_blob_ids(self, tag):
+    def update_blob_ids(self, version):
 
         global hash_file_lock, blobs_lock
 
@@ -108,7 +108,7 @@ class UpdateIds(Thread):
             idx = 0
 
         # Get blob hashes and associated file names (without path)
-        blobs = scriptLines('list-blobs', '-f', tag)
+        blobs = scriptLines('list-blobs', '-f', version_to_tag[version])
 
         new_idxes = []
         for blob in blobs:
@@ -148,25 +148,25 @@ class UpdateVersions(Thread):
                     tag_ready.wait()
                 continue
 
-            tag = self.tag_buf[index]
+            version = self.tag_buf[index]
 
-            new_idxes[index][1].wait() # Make sure the tag is ready
+            new_idxes[index][1].wait() # Make sure the version is ready
 
-            self.update_versions(tag)
+            self.update_versions(version)
 
-            new_idxes[index][4].set() # Tell that UpdateVersions processed the tag
+            new_idxes[index][4].set() # Tell that UpdateVersions processed the version
 
-            progress('vers: ' + tag.decode() + ' done', index+1)
+            progress('vers: ' + version.decode() + ' done', index+1)
 
             index += 1
 
         progress('vers: Thread finished', index)
 
-    def update_versions(self, tag):
+    def update_versions(self, version):
         global blobs_lock
 
         # Get blob hashes and associated file paths
-        blobs = scriptLines('list-blobs', '-p', tag)
+        blobs = scriptLines('list-blobs', '-p', version_to_tag[version])
         buf = []
 
         for blob in blobs:
@@ -185,8 +185,8 @@ class UpdateVersions(Thread):
                 bindings_idxes.append(idx)
 
             if verbose:
-                print(f"Tag {tag}: adding #{idx} {path}")
-        db.vers.put(tag, obj, sync=True)
+                print(f"Tag {version}: adding #{idx} {path}")
+        db.version_blobs.put(version, obj, sync=True)
 
 
 def generate_defs_caches():
@@ -587,9 +587,15 @@ num_th_defs += quo
 num_th_refs += quo + rem
 
 tag_buf = []
-for tag in scriptLines('list-tags'):
-    if not db.vers.exists(tag):
-        tag_buf.append(tag)
+version_to_tag = {}
+for line in scriptLines('versions'):
+    tag, version, is_rc = line.split(b'\t')
+    if not db.version_tag.exists(version):
+        tag_buf.append(version)
+        version_to_tag[version] = tag
+        db.version_tag.put(version, tag, sync=True)
+    else:
+        assert db.version_blobs.exists(version)
 
 num_tags = len(tag_buf)
 project = lib.currentProject()

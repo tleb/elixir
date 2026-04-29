@@ -21,6 +21,7 @@
 from .lib import script, scriptLines, decode
 from . import lib
 from . import data
+import re
 import os
 from collections import OrderedDict
 from urllib import parse
@@ -91,7 +92,7 @@ class Query:
         if version not in self.file_cache:
             version_cache = set()
             last_dir = None
-            for _, path in self.db.vers.get(version).iter():
+            for _, path in self.db.version_blobs.get(version).iter():
                 dirname, filename = os.path.split(path)
                 if dirname != last_dir:
                     last_dir = dirname
@@ -130,12 +131,12 @@ class Query:
                 buffer.write(tok)
             return decode(buffer.getvalue())
         else:
-            return decode(self.script('get-file', version, path))
+            return decode(self.script('get-file', self.version_to_tag(version), path))
 
     # Returns the contents (trees or blobs) of the specified directory
     # Example: v3.1-rc10 /arch
     def get_dir_contents(self, version, path):
-        entries_str =  decode(self.script('get-dir', version, path))
+        entries_str =  decode(self.script('get-dir', self.version_to_tag(version), path))
         return entries_str.split("\n")[:-1]
 
     # Returns indexed versions, as a tree of OrderedDict.
@@ -143,28 +144,23 @@ class Query:
     def get_versions(self):
         versions = OrderedDict()
 
-        for line in self.scriptLines('list-tags', '-h'):
-            taginfo = decode(line).split(' ')
-            num = len(taginfo)
-            topmenu, submenu = 'FIXME', 'FIXME'
+        for _, version, _ in self.versions_cmd():
+            m = re.match(r'^(v\d+)\.\d+', version)
+            topmenu = m.group(1)
+            submenu = m.group(0)
 
-            if num == 1:
-                tag, = taginfo
-            elif num == 2:
-                submenu, tag = taginfo
-            elif num == 3:
-                topmenu, submenu, tag = taginfo
-            else:
-                raise Exception("unexpected number of fields in taginfo")
-
-            if self.db.vers.exists(tag):
-                if topmenu not in versions:
-                    versions[topmenu] = OrderedDict()
-                if submenu not in versions[topmenu]:
-                    versions[topmenu][submenu] = []
-                versions[topmenu][submenu].append(tag)
+            if topmenu not in versions:
+                versions[topmenu] = OrderedDict()
+            if submenu not in versions[topmenu]:
+                versions[topmenu][submenu] = []
+            versions[topmenu][submenu].append(version)
 
         return versions
+
+    def version_to_tag(self, version):
+        # TODO: make query in self
+        return self.db.version_tag.get(version)
+
 
     # Returns the type (blob or tree) associated to
     # the given path. Example:
@@ -173,7 +169,7 @@ class Query:
     # > ./query.py type v3.1-rc10 /arch
     # tree
     def get_file_type(self, version, path):
-        return decode(self.script('get-type', version, path)).strip()
+        return decode(self.script('get-type', self.version_to_tag(version), path)).strip()
 
     # Returns identifier search results
     def search_ident(self, version, ident, family):
@@ -183,23 +179,24 @@ class Query:
         else:
             return self.get_idents_defs(version, ident, family)
 
+    def versions_cmd(self):
+        for line in self.scriptLines('versions'):
+            line = decode(line)
+            # unpack to trigger error on invalid format
+            tag, version, is_rc = line.split('\t')
+            yield (tag, version, bool(is_rc))
+
     # Returns the latest tag that is included in the database.
     # This excludes release candidates if `rc` is False.
     def get_latest_tag(self, rc):
-        if rc:
-            sorted_tags = reversed(self.scriptLines('list-tags'))
-        else:
-            sorted_tags = self.scriptLines('get-latest-tags')
+        for _, version, tag_is_rc in self.versions_cmd():
+            if rc or not tag_is_rc:
+                return version
+        raise ValueError('could not find latest version')
 
-        for tag in sorted_tags:
-            if self.db.vers.exists(tag):
-                return tag.decode()
-
-        # return the oldest tag, even if it does not exist in the database
-        return sorted_tags[-1].decode()
 
     def get_file_raw(self, version, path):
-        return decode(self.script('get-file', version, path))
+        return decode(self.script('get-file', self.version_to_tag(version), path))
 
     def get_idents_comps(self, version, ident):
 
@@ -217,7 +214,7 @@ class Query:
         if not self.dts_comp_support or not self.db.comps.exists(ident):
             return symbol_c, symbol_dts, symbol_docs, False
 
-        files_this_version = self.db.vers.get(version).iter()
+        files_this_version = self.db.version_blobs.get(version).iter()
         comps = self.db.comps.get(ident).iter(dummy=True)
 
         if self.db.comps_docs.exists(ident):
@@ -267,10 +264,10 @@ class Query:
         if not self.db.defs.exists(ident):
             return symbol_definitions, symbol_references, symbol_doccomments, False
 
-        if not self.db.vers.exists(version):
+        if not self.db.version_tag.exists(version):
             return symbol_definitions, symbol_references, symbol_doccomments, True
 
-        files_this_version = self.db.vers.get(version).iter()
+        files_this_version = self.db.version_blobs.get(version).iter()
         this_ident = self.db.defs.get(ident)
         defs_this_ident = this_ident.iter(dummy=True)
         macros_this_ident = this_ident.get_macros()
