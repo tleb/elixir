@@ -35,16 +35,16 @@ verbose = False
 project = "linux"
 versions = ["latest", "v5.6.2"]
 idents = [
-    ("loopback", "C"),
-    ("devm_register_reboot_notifier", "C"),
-    ("notrace", "C"),
-    ("arch_local_irq_restore", "C"),
-    ("blk_queue_dma_alignment", "C"),
-    ("spinlock_t", "C"),
-    ("max", "C"),
-    ("task_struct", "C"),
-    ("eth_header", "C"),
-    ("sk_buff", "C"),
+    "loopback",
+    "devm_register_reboot_notifier",
+    "notrace",
+    "arch_local_irq_restore",
+    "blk_queue_dma_alignment",
+    "spinlock_t",
+    "max",
+    "task_struct",
+    "eth_header",
+    "sk_buff",
 ]
 
 files = [
@@ -92,7 +92,7 @@ def get_ident(query, ident, version):
         rc = version == "latest"
         version = query.get_latest_version(rc=rc)
 
-    return query.search_ident(version, ident[0], ident[1])
+    return query.search_ident(version, ident)
 
 
 def get_file(query, path, version):

@@ -19,9 +19,9 @@ def cmd_versions(q, **kwargs):
                 print(v)
 
 
-def cmd_ident(q, version, ident, family, **kwargs):
+def cmd_ident(q, version, ident, **kwargs):
     symbol_definitions, symbol_references, symbol_doccomments, _ = q.search_ident(
-        version, ident, family
+        version, ident
     )
     print("Symbol Definitions:")
     for symbol_definition in symbol_definitions:
@@ -65,7 +65,6 @@ if __name__ == "__main__":
         "version", help="The version of the project", type=str, default="latest"
     )
     ident_subparser.add_argument("ident", type=str, help="The name of the identifier")
-    ident_subparser.add_argument("family", type=str, help="The file family requested")
     ident_subparser.set_defaults(func=cmd_ident, q=query)
 
     file_subparser = subparsers.add_parser("file", help="Get a source file")

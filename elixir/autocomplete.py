@@ -19,7 +19,6 @@
 
 import falcon
 
-from .lib import validFamily
 from .query import get_query
 from .web_utils import validate_ident, validate_project
 
@@ -27,7 +26,6 @@ from .web_utils import validate_ident, validate_project
 class AutocompleteResource:
     def on_get(self, req, resp):
         ident_prefix = req.get_param("q")
-        family = req.get_param("f")
         project = req.get_param("p")
 
         ident_prefix = validate_ident(ident_prefix)
@@ -37,9 +35,6 @@ class AutocompleteResource:
         project = validate_project(project)
         if project is None:
             raise falcon.HTTPInvalidParam("", "project")
-
-        if not validFamily(family):
-            family = "C"
 
         query = get_query(req.context.config.project_dir, project)
         if not query:

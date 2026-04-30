@@ -195,50 +195,8 @@ class Query:
             self.script("get-type", self.version_to_tag(version), path)
         ).strip()
 
-    # Returns identifier search results
-    def search_ident(self, version, ident, family):
-        # DT bindings compatible strings are handled differently
-        if family == "B":
-            versionid = self.maybe_versionname_to_versionid(version)
-            if versionid is None:
-                return [], [], [], False
-
-            defs = self.ddb.execute(
-                """
-                SELECT vo.filepath, d.defline
-                FROM defs d
-                INNER JOIN version_objects vo ON d.blobid = vo.blobid
-                WHERE d.defname = ? AND vo.versionid = ? AND d.deftype = 'compatible'
-            """,
-                (ident, versionid),
-            ).fetchall()
-            symbol_definitions = [SymbolInstance(p, l, "compatible") for p, l in defs]
-
-            dts_refs = self.ddb.execute(
-                """
-                SELECT vo.filepath, r.refline
-                FROM refs r
-                INNER JOIN version_objects vo ON r.blobid = vo.blobid
-                WHERE r.refname = ? AND vo.versionid = ? AND r.blobfamily = 'D'
-            """,
-                (ident, versionid),
-            ).fetchall()
-            symbol_references = [SymbolInstance(p, l) for p, l in dts_refs]
-
-            docs_refs = self.ddb.execute(
-                """
-                SELECT vo.filepath, r.refline
-                FROM refs r
-                INNER JOIN version_objects vo ON r.blobid = vo.blobid
-                WHERE r.refname = ? AND vo.versionid = ? AND r.blobfamily = 'B'
-            """,
-                (ident, versionid),
-            ).fetchall()
-            symbol_doccomments = [SymbolInstance(p, l) for p, l in docs_refs]
-
-            return symbol_definitions, symbol_references, symbol_doccomments, True
-        else:
-            return self.get_idents_defs(version, ident, family)
+    def search_ident(self, version, ident):
+        return self.get_idents_defs(version, ident)
 
     def versions_cmd(self):
         for line in self.scriptLines("versions"):
@@ -271,61 +229,40 @@ class Query:
         versionid = self.ddb.execute(QUERY, (versionname,)).fetchone()
         return None if versionid is None else versionid[0]
 
-    def get_idents_defs(self, versionname, ident, blobfamily):
+    def get_idents_defs(self, versionname, ident):
         if not self.def_exists_in_db(ident):
-            return symbol_definitions, symbol_references, symbol_doccomments, False
+            return [], [], [], False
         versionid = self.maybe_versionname_to_versionid(versionname)
-        if versionid is None:  # version doesn't exist
-            return symbol_definitions, symbol_references, symbol_doccomments, False
+        if versionid is None:
+            return [], [], [], False
 
-        # TODO: move that to a static SQL query to avoid building it as a string?
-        if blobfamily == "A":
-            fam_filter = ""  # no blobfamily filtering
-        elif blobfamily == "D":
-            # The previous behavior was different: if we searched for DTSI and the def had
-            # macros defined in C code, we returned all defs. We move away from that;
-            # instead we return only entries that are macros defined in C.
-            fam_filter = (
-                "AND (blobfamily == 'D' OR (blobfamily == 'C' AND deftype == 'macro'))"
-            )
-        else:
-            fam_filter = "AND blobfamily == $f"
-
-        QUERY = (
-            """
-        SELECT filepath, defline, deftype FROM defs
-        INNER JOIN version_objects ON defs.blobid = version_objects.blobid
-        WHERE defname = $d AND versionid = $v """
-            + fam_filter
-        )
-        defs = self.ddb.execute(
-            QUERY, parameters={"d": ident, "v": versionid, "f": blobfamily}
-        )
+        QUERY = """
+            SELECT filepath, defline, deftype FROM defs
+            INNER JOIN version_objects ON defs.blobid = version_objects.blobid
+            WHERE defname = $d AND versionid = $v
+        """
+        defs = self.ddb.execute(QUERY, parameters={"d": ident, "v": versionid})
         defs = [
             SymbolInstance(x.filepath, x.defline, x.deftype)
             for x in defs.df().itertuples()
         ]
 
-        if blobfamily == "A":
-            fam_filter = ""
-        elif blobfamily == "C":
-            fam_filter = "AND (blobfamily = $f OR blobfamily = 'K')"
-        elif blobfamily in ["K", "D", "M"]:
-            fam_filter = "AND blobfamily = $f"
-
-        QUERY = (
-            """
-        SELECT filepath, refline FROM refs
-        INNER JOIN version_objects ON refs.blobid = version_objects.blobid
-        WHERE refname = $r AND versionid = $v """
-            + fam_filter
-        )
-        refs = self.ddb.execute(
-            QUERY, parameters={"r": ident, "v": versionid, "f": blobfamily}
-        )
+        QUERY = """
+            SELECT filepath, refline FROM refs
+            INNER JOIN version_objects ON refs.blobid = version_objects.blobid
+            WHERE refname = $r AND versionid = $v AND blobfamily != 'B'
+        """
+        refs = self.ddb.execute(QUERY, parameters={"r": ident, "v": versionid})
         refs = [SymbolInstance(x.filepath, x.refline) for x in refs.df().itertuples()]
 
-        # TODO: deal with doccomments!
-        # TODO: previous code sorts defs and refs, we might want to replicate that.
+        QUERY = """
+            SELECT filepath, refline FROM refs
+            INNER JOIN version_objects ON refs.blobid = version_objects.blobid
+            WHERE refname = $r AND versionid = $v AND blobfamily = 'B'
+        """
+        doccomments = self.ddb.execute(QUERY, parameters={"r": ident, "v": versionid})
+        doccomments = [
+            SymbolInstance(x.filepath, x.refline) for x in doccomments.df().itertuples()
+        ]
 
-        return defs, refs, [], True
+        return defs, refs, doccomments, True

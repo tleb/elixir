@@ -35,7 +35,7 @@ from .api import ApiIdentGetterResource
 from .autocomplete import AutocompleteResource
 from .filters import get_filters
 from .filters.utils import FilterContext
-from .lib import getFileFamily, validFamily
+from .lib import getFileFamily
 from .query import Query, SymbolInstance, get_query
 from .web_utils import (
     Config,
@@ -110,9 +110,7 @@ def get_project_error_page(req, resp, exception: ElixirProjectError):
 
     template_ctx = {
         "projects": get_projects(req.context.config.project_dir),
-        "topbar_families": TOPBAR_FAMILIES,
         "current_version_path": (None, None, None),
-        "current_family": "A",
         "source_base_url": "/",
         "elixir_version_string": req.context.config.version_string,
         "elixir_repo_url": req.context.config.repo_url,
@@ -177,9 +175,7 @@ def get_error_page(req, resp, exception: ElixirProjectError):
 
     template_ctx = {
         "projects": get_projects(req.context.config.project_dir),
-        "topbar_families": TOPBAR_FAMILIES,
         "current_version_path": (None, None, None),
-        "current_family": "A",
         "source_base_url": "/",
         "referer": req.referer,
         "bug_report_url": ADD_ISSUE_LINK + parse.quote(report_error_details),
@@ -304,37 +300,23 @@ class SourceWithoutPathResource(SourceResource):
 
 # Returns base url of ident pages
 # project and version assumed unquoted
-def get_ident_base_url(project: str, version: str, family: str | None = None) -> str:
+def get_ident_base_url(project: str, version: str) -> str:
     project = parse.quote(project, safe="")
     version = parse.quote(version, safe="")
-    if family is not None:
-        return f"/{project}/{version}/{parse.quote(family, safe='')}/ident"
-    else:
-        return f"/{project}/{version}/ident"
+    return f"/{project}/{version}/ident"
 
 
 # Converts ParsedIdentPath to a string with corresponding URL path
-def stringify_ident_path(project, version, family, ident) -> str:
-    path = (
-        f"{get_ident_base_url(project, version, family)}/{parse.quote(ident, safe='')}"
-    )
+def stringify_ident_path(project, version, ident) -> str:
+    path = f"{get_ident_base_url(project, version)}/{parse.quote(ident, safe='')}"
     return path.rstrip("/")
 
 
 # Handles redirect from ident with form (POST/GET with query parameters)
 # to default ident URL format
 class IdentPostRedirectResource:
-    def on_get(
-        self,
-        req,
-        resp,
-        project: str,
-        version: str,
-        family: str | None = None,
-        _ident: str | None = None,
-    ):
+    def on_get(self, req, resp, project: str, version: str):
         get_ident = req.get_param("i", required=False)
-        get_family = req.get_param("f", required=False)
         if get_ident is None:
             project, version, _ = validate_project_and_version(
                 req.context, project, version
@@ -342,29 +324,17 @@ class IdentPostRedirectResource:
             resp.status = falcon.HTTP_FOUND
             resp.location = stringify_source_path(project, version, "")
         else:
-            return self.handle(req, resp, project, version, get_ident, get_family)
+            return self.handle(req, resp, project, version, get_ident)
 
-    def on_post(
-        self,
-        req,
-        resp,
-        project: str,
-        version: str,
-        family: str | None = None,
-        _ident: str | None = None,
-    ):
+    def on_post(self, req, resp, project: str, version: str):
         form = req.get_media()
         post_ident = form.get("i")
-        post_family = form.get("f")
-        return self.handle(req, resp, project, version, post_ident, post_family)
+        return self.handle(req, resp, project, version, post_ident)
 
-    def handle(self, req, resp, project: str, version: str, ident: str, family: str):
+    def handle(self, req, resp, project: str, version: str, ident: str):
         project, version, query = validate_project_and_version(
             req.context, project, version
         )
-
-        if not validFamily(family):
-            family = "C"
 
         if not ident:
             raise ElixirProjectError(
@@ -375,13 +345,12 @@ class IdentPostRedirectResource:
                 query=query,
                 extra_template_args={
                     "searched_ident": parse.unquote(ident),
-                    "current_family": family,
                 },
             )
 
         ident = ident.strip()
         resp.status = falcon.HTTP_MOVED_PERMANENTLY
-        resp.location = stringify_ident_path(project, version, family, ident)
+        resp.location = stringify_ident_path(project, version, ident)
 
         query.close()
 
@@ -389,15 +358,11 @@ class IdentPostRedirectResource:
 # Handles ident URLs when family is specified in the URL, both POST and GET
 # See IdentPostRedirectResource for behavior on POST
 # Path parameters are asssumed to be unquoted by converters
-class IdentResource(IdentPostRedirectResource):
+class IdentResource:
     def on_get(self, req, resp, project: str, version: str, family: str, ident: str):
         project, version, query = validate_project_and_version(
             req.context, project, version
         )
-
-        family = parse.unquote(family)
-        if not validFamily(family):
-            family = "C"
 
         ident = parse.unquote(ident)
         validated_ident = validate_ident(ident)
@@ -408,10 +373,39 @@ class IdentResource(IdentPostRedirectResource):
                 project=project,
                 version=version,
                 query=query,
-                extra_template_args={
-                    "searched_ident": ident,
-                    "current_family": family,
-                },
+                extra_template_args={"searched_ident": ident},
+            )
+
+        ident = validated_ident
+
+        if version in ("latest", "latest-rc"):
+            rc = version == "latest-rc"
+            version = query.get_latest_version(rc=rc)
+
+        resp.status = falcon.HTTP_MOVED_PERMANENTLY
+        resp.location = stringify_ident_path(project, version, ident)
+        query.close()
+
+
+# Handles ident URLs when family is not specified in the URL
+# Also handles POST requests for ident URLs without family - IdentPostRedirectResource is
+# inherited from IdentResource
+class IdentWithoutFamilyResource:
+    def on_get(self, req, resp, project: str, version: str, ident: str):
+        project, version, query = validate_project_and_version(
+            req.context, project, version
+        )
+
+        ident = parse.unquote(ident)
+        validated_ident = validate_ident(ident)
+        if validated_ident is None:
+            raise ElixirProjectError(
+                "Error",
+                "Invalid identifier",
+                project=project,
+                version=version,
+                query=query,
+                extra_template_args={"searched_ident": ident},
             )
 
         ident = validated_ident
@@ -420,23 +414,14 @@ class IdentResource(IdentPostRedirectResource):
             rc = version == "latest-rc"
             version = query.get_latest_version(rc=rc)
             resp.status = falcon.HTTP_FOUND
-            resp.location = stringify_ident_path(project, version, family, ident)
+            resp.location = stringify_ident_path(project, version, ident)
             return
 
         resp.content_type = falcon.MEDIA_HTML
         resp.status, resp.text = generate_ident_page(
-            req.context, query, project, version, family, ident
+            req.context, query, project, version, ident
         )
-
         query.close()
-
-
-# Handles ident URLs when family is not specified in the URL
-# Also handles POST requests for ident URLs without family - IdentPostRedirectResource is
-# inherited from IdentResource
-class IdentWithoutFamilyResource(IdentResource):
-    def on_get(self, req, resp, project: str, version: str, ident: str):
-        super().on_get(req, resp, project, version, "C", ident)
 
 
 # Handles /{project}/{version} URL, without path
@@ -482,20 +467,8 @@ class UnknownPathResource:
             project=project,
             version=version,
             query=query,
-            extra_template_args={
-                "current_family": "A",
-            },
+            extra_template_args={},
         )
-
-
-# File families available in the dropdown next to search input in the topbar
-TOPBAR_FAMILIES = {
-    "A": "All symbols",
-    "C": "C/CPP/ASM",
-    "K": "Kconfig",
-    "D": "Devicetree",
-    "B": "DT compatible",
-}
 
 
 # Returns a list of names of top-level directories in basedir
@@ -591,14 +564,12 @@ def get_layout_template_context(
         "projects": get_projects(ctx.config.project_dir),
         "versions": versions,
         "current_version_path": current_version_path,
-        "topbar_families": TOPBAR_FAMILIES,
         "elixir_version_string": ctx.config.version_string,
         "elixir_repo_url": ctx.config.repo_url,
         "source_base_url": get_source_base_url(project, version),
         "ident_base_url": get_ident_base_url(project, version),
         "current_project": project,
         "current_version": parse.unquote(version),
-        "current_family": "A",
     }
 
 
@@ -667,9 +638,7 @@ def generate_source(q: Query, project: str, version: str, path: str) -> str:
     source_base_url = get_source_base_url(project, version)
 
     def get_ident_url(ident, ident_family=None):
-        if ident_family is None:
-            ident_family = family
-        return stringify_ident_path(project, version, ident_family, ident)
+        return stringify_ident_path(project, version, ident)
 
     filter_ctx = FilterContext(
         q,
@@ -854,13 +823,13 @@ def symbol_instance_to_entry(base_url: str, symbol: SymbolInstance) -> SymbolEnt
 # Generates response (status code and optionally HTML) of the `ident` route
 # basedir: path to data directory, ex: "/srv/elixir-data"
 def generate_ident_page(
-    ctx: RequestContext, q: Query, project: str, version: str, family: str, ident: str
+    ctx: RequestContext, q: Query, project: str, version: str, ident: str
 ) -> tuple[int, str]:
 
     status = falcon.HTTP_OK
     source_base_url = get_source_base_url(project, version)
     symbol_definitions, symbol_references, symbol_doccomments, symbol_exists = (
-        q.search_ident(version, ident, family)
+        q.search_ident(version, ident)
     )
     symbol_sections = []
 
@@ -927,14 +896,13 @@ def generate_ident_page(
     elif ident != "":
         status = falcon.HTTP_NOT_FOUND
 
-    get_url_with_new_version = lambda v: stringify_ident_path(project, v, family, ident)
+    get_url_with_new_version = lambda v: stringify_ident_path(project, v, ident)
 
     data = {
         **get_layout_template_context(
             q, ctx, get_url_with_new_version, project, version
         ),
         "searched_ident": ident,
-        "current_family": family,
         "symbol_sections": symbol_sections,
         "symbol_exists": symbol_exists,
     }

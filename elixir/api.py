@@ -20,7 +20,6 @@
 
 import falcon
 
-from .lib import validFamily
 from .query import get_query
 from .web_utils import validate_version
 
@@ -30,10 +29,6 @@ class ApiIdentGetterResource:
         version = validate_version(req.get_param("version"))
         if version is None:
             raise falcon.HTTPInvalidParam("", "version")
-
-        family = req.get_param("family")
-        if not validFamily(family):
-            family = "C"
 
         query = get_query(req.context.config.project_dir, project)
         if not query:
@@ -45,7 +40,7 @@ class ApiIdentGetterResource:
             version = query.get_latest_version(rc=rc)
 
         symbol_definitions, symbol_references, symbol_doccomments, _ = (
-            query.search_ident(version, ident, family)
+            query.search_ident(version, ident)
         )
 
         resp.status = falcon.HTTP_200
