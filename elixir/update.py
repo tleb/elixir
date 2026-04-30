@@ -65,7 +65,7 @@ def pool_and_write_output_to_db(ddb, worker_fn, worker_args, query):
 
 
 def stage01_ddb_init():
-    ddb = duckdb.connect(os.path.join(os.environ["LXR_DATA_DIR"], "data.db"))
+    ddb = duckdb.connect(os.path.join(lib.getDataDir(), "data.db"))
 
     deftypes = np.array(list(DEFTYPES))
 
@@ -546,7 +546,9 @@ class Section:
         )
 
 
-def main():
+def main(data_dir=None, repo_dir=None, project=None):
+    if data_dir and repo_dir and project:
+        lib.configure(data_dir, repo_dir, project)
     # TODO: dump the CPU (usr/sys) time spent in: main process, Python children processes
     # and other subprocesses. Do so on a per-step basis.
     #
