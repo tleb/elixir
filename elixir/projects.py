@@ -11,7 +11,7 @@ class ProjectConfig:
     get_versions: Callable[[str], list[tuple[str, str, bool]]] = None
 
 
-def _default_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
+def _get_tags_sorted(repo_dir: str) -> list[str]:
     out = subprocess.run(
         ["git", "-C", repo_dir, "tag", "--sort=-creatordate"],
         capture_output=True,
@@ -19,23 +19,230 @@ def _default_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
     )
     if out.returncode != 0:
         return []
-    return [(tag, tag, False) for tag in out.stdout.splitlines() if tag]
+    return [tag for tag in out.stdout.splitlines() if tag]
+
+
+def _default_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
+    return [(tag, tag, False) for tag in _get_tags_sorted(repo_dir)]
 
 
 def _tag_pattern_versions(repo_dir: str, pattern: str) -> list[tuple[str, str, bool]]:
-    out = subprocess.run(
-        ["git", "-C", repo_dir, "tag", "--sort=-creatordate"],
-        capture_output=True,
-        text=True,
-    )
-    if out.returncode != 0:
-        return []
     regex = re.compile(pattern)
     return [
-        (tag, tag, False)
-        for tag in out.stdout.splitlines()
-        if tag and regex.search(tag)
+        (tag, tag, False) for tag in _get_tags_sorted(repo_dir) if regex.search(tag)
     ]
+
+
+def _musl_uclibc_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
+    pattern = re.compile(r"^v\d+(\.\d+){2}$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        if pattern.match(tag):
+            result.append((tag, tag, False))
+        else:
+            break
+    return result
+
+
+def _barebox_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
+    skip = re.compile(
+        r"^v2\.0\.0-rc\d+$"
+        r"|^freescale-mx35-3-stack-20092611-1$"
+        r"|^v2011\.04\.0-phytec-pcm049$"
+    )
+    pattern = re.compile(r"^v\d+(\.\d+){2}$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        if skip.match(tag):
+            continue
+        if pattern.match(tag):
+            result.append((tag, tag, False))
+        else:
+            break
+    return result
+
+
+def _glibc_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
+    skip = re.compile(
+        r"^(cvs|fedora)/"
+        r"|^changelog-ends-here$"
+        r"|^glibc-(\d+\.){2}(90|9000)$"
+    )
+    pattern = re.compile(r"^glibc-\d+(\.\d+){1,2}")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        if skip.match(tag):
+            continue
+        if pattern.match(tag):
+            result.append((tag, "v" + tag[6:], False))
+        else:
+            break
+    return result
+
+
+def _igt_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
+    p1 = re.compile(r"^(intel|igt)-gpu-tools-(.+)")
+    p2 = re.compile(r"^v?(\d+(\.\d+){1,2})$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        m = p1.match(tag)
+        if m:
+            result.append((tag, "v" + m.group(2), False))
+            continue
+        m = p2.match(tag)
+        if m:
+            result.append((tag, "v" + m.group(1), False))
+            continue
+        break
+    return result
+
+
+def _llvm_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
+    p1 = re.compile(r"^llvmorg-(\d+(\.\d+){1,2}(-rc\d+)?)$")
+    p2 = re.compile(r"^llvmorg-(\d+)-init$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        m = p1.match(tag)
+        if m:
+            result.append((tag, "v" + m.group(1), bool(m.group(3))))
+            continue
+        m = p2.match(tag)
+        if m:
+            result.append((tag, f"v{m.group(1)}.0-init", True))
+            continue
+        break
+    return result
+
+
+def _mesa_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
+    skip_starts = (
+        "chadv/",
+        "texman_",
+        "texmem_",
+        "cros-mesa-",
+        "arc-mesa-",
+        "skl-fast-clear-",
+        "vulkan-",
+        "android-",
+        "embedded-",
+    )
+    skip_set = {
+        "7.8-rc1",
+        "7.8-rc2",
+        "before_upgrade_03_01_05",
+        "blended_fountain",
+        "core-context-v2",
+        "gles3-fmt-v1",
+        "gliding_penguin",
+        "i965-primitive-restart-v2",
+        "instanced_arrays-v2",
+        "intel-2012q4.1",
+        "intel_2009q1_rc1",
+        "intel_2009q1_rc2",
+        "intel_2009q1_rc3",
+        "intel_2009q2_rc3",
+        "jump_and_click",
+        "kw-mesa-1",
+        "mesa_texman_20060210",
+        "noisy_cube",
+        "post-merge-glsl-compiler-1",
+        "pre-merge-glsl-compiler-1",
+        "R300_DRIVER_0",
+        "red_tinted_cube",
+        "rgb10_a2ui-v3",
+        "rotating_gears",
+        "shimmering_gears",
+        "snb-magic",
+        "start",
+        "the_perfect_frag",
+        "trunk_20040329",
+        "unichrome-last-xinerama",
+        "useful",
+        "vtx-0-2-21112003-freeze",
+        "vtx-0-2-24112003",
+        "mesa-6_5-20060712",
+    }
+    skip_date = re.compile(r"^mesa_\d{8}$")
+    p1 = re.compile(r"^mesa-(\d+((\.|-)\d+){1,2}(-rc\d+)?(-(\d+\.)?\d+)?)$")
+    p2 = re.compile(r"^mesa_(\d+(_\d+){1,2}(_rc\d+)?(_\d+)?)$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        if tag.endswith("-branchpoint"):
+            continue
+        if tag.startswith(skip_starts):
+            continue
+        if skip_date.match(tag):
+            continue
+        if tag in skip_set:
+            continue
+        if tag == "mesa-10.1-devel":
+            result.append((tag, "v10.1-devel", True))
+            continue
+        if tag == "mesa_3_1_beta_3":
+            result.append((tag, "v3.1-beta-3", True))
+            continue
+        if tag == "mesa_3_2_beta_1":
+            result.append((tag, "v3.2-beta-1", True))
+            continue
+        m = p1.match(tag)
+        if m:
+            result.append((tag, "v" + m.group(1), bool(m.group(4))))
+            continue
+        m = p2.match(tag)
+        if m:
+            result.append((tag, "v" + m.group(1).replace("_", "."), bool(m.group(3))))
+            continue
+        break
+    return result
+
+
+def _optee_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
+    pattern = re.compile(r"^\d+\.\d+\.\d+(-rc\d+)?$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        if tag == "20160825-for-lmg":
+            continue
+        m = pattern.match(tag)
+        if m:
+            result.append((tag, "v" + tag, bool(m.group(1))))
+            continue
+        break
+    return result
+
+
+def _uboot_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
+    p1 = re.compile(r"^v\d+(\.\d+){1,2}(-rc\d+)?$")
+    p2 = re.compile(r"(U-Boot-|U_BOOT_)(\d+_\d+_\d+)")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        if (
+            tag.endswith("-dont-use")
+            or tag.startswith("LABEL_")
+            or tag.startswith("DENX-")
+        ):
+            continue
+        m = p1.match(tag)
+        if m:
+            result.append((tag, tag, bool(m.group(2))))
+            continue
+        m = p2.search(tag)
+        if m:
+            result.append((tag, "v" + m.group(2).replace("_", "."), False))
+            continue
+        break
+    return result
+
+
+def _vpp_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
+    pattern = re.compile(r"^v\d+(\.\d+){1,2}(-rc\d+)?$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        m = pattern.match(tag)
+        if m:
+            result.append((tag, tag, bool(m.group(2))))
+            continue
+        break
+    return result
 
 
 PROJECTS: dict[str, ProjectConfig] = {
@@ -131,6 +338,29 @@ PROJECTS: dict[str, ProjectConfig] = {
     ),
 }
 
-for _p in PROJECTS.values():
-    if _p.get_versions is None:
-        _p.get_versions = _default_get_versions
+PROJECTS["amazon-freertos"].get_versions = _default_get_versions
+PROJECTS["arm-trusted-firmware"].get_versions = _default_get_versions
+PROJECTS["barebox"].get_versions = _barebox_get_versions
+PROJECTS["bluez"].get_versions = _default_get_versions
+PROJECTS["busybox"].get_versions = _default_get_versions
+PROJECTS["coreboot"].get_versions = _default_get_versions
+PROJECTS["dpdk"].get_versions = _default_get_versions
+PROJECTS["freebsd"].get_versions = _default_get_versions
+PROJECTS["glibc"].get_versions = _glibc_get_versions
+PROJECTS["grub"].get_versions = _default_get_versions
+PROJECTS["igt"].get_versions = _igt_get_versions
+PROJECTS["iproute2"].get_versions = _default_get_versions
+PROJECTS["linux"].get_versions = _default_get_versions
+PROJECTS["llvm"].get_versions = _llvm_get_versions
+PROJECTS["mesa"].get_versions = _mesa_get_versions
+PROJECTS["musl"].get_versions = _musl_uclibc_get_versions
+PROJECTS["ofono"].get_versions = _default_get_versions
+PROJECTS["op-tee"].get_versions = _optee_get_versions
+PROJECTS["opensbi"].get_versions = _default_get_versions
+PROJECTS["qemu"].get_versions = _default_get_versions
+PROJECTS["toybox"].get_versions = _default_get_versions
+PROJECTS["u-boot"].get_versions = _uboot_get_versions
+PROJECTS["uclibc-ng"].get_versions = _musl_uclibc_get_versions
+PROJECTS["vpp"].get_versions = _vpp_get_versions
+PROJECTS["xen"].get_versions = _default_get_versions
+PROJECTS["zephyr"].get_versions = _default_get_versions
