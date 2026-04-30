@@ -26,7 +26,7 @@ from io import BytesIO
 import duckdb
 import numpy as np
 
-from . import lib
+from . import lib, projects
 from .lib import decode, script, scriptLines
 
 
@@ -57,14 +57,18 @@ def get_query(basedir, project):
     if not os.path.exists(datadir) or not os.path.exists(repodir):
         return None
 
-    return Query(datadir, repodir)
+    return Query(datadir, repodir, project)
 
 
 class Query:
-    def __init__(self, data_dir, repo_dir):
+    def __init__(self, data_dir, repo_dir, project=None):
         self.repo_dir = repo_dir
         self.data_dir = data_dir
-        self.dts_comp_support = int(self.script("dts-comp"))
+        self.project = project
+        if project and project in projects.PROJECTS:
+            self.dts_comp_support = int(projects.PROJECTS[project].dts_comp_support)
+        else:
+            self.dts_comp_support = 0
         self.ddb = duckdb.connect(os.path.join(data_dir, "data.db"), read_only=True)
         self.file_cache = {}
 
@@ -72,17 +76,10 @@ class Query:
         self.ddb.close()
 
     def script(self, *args):
-        return script(*args, env=self.getEnv())
+        return script(*args, repo_dir=self.repo_dir, project=self.project)
 
     def scriptLines(self, *args):
-        return scriptLines(*args, env=self.getEnv())
-
-    def getEnv(self):
-        return {
-            **os.environ,
-            "LXR_REPO_DIR": self.repo_dir,
-            "LXR_DATA_DIR": self.data_dir,
-        }
+        return scriptLines(*args, repo_dir=self.repo_dir, project=self.project)
 
     # Check if a dts compatible string exists
     def dts_comp_exists(self, ident):
