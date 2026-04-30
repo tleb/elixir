@@ -90,12 +90,7 @@ var AutoComplete = /** @class */ (function () {
             }
         }
 
-        // Init cache for all families
-        var e = document.getElementsByName("f")[0];
-        for (var i = 0; i < e.options.length; i++) {
-            var family = encodeURIComponent(e.options[i].value);
-            params.$Cache[family] = {};
-        }
+        params.$Cache = {};
     };
     AutoComplete.prototype.getEventsByType = function (params, type) {
         var mappings = {};
@@ -155,11 +150,6 @@ var AutoComplete = /** @class */ (function () {
             }
         }
 
-        // Send select family to display only relevant elements
-        var e = document.getElementsByName("f")[0];
-        var family = encodeURIComponent(e.options[e.selectedIndex].value);
-        url += "&f=" + encodeURIComponent(family);
-
         // Send project name
         url += "&p=" + encodeURIComponent(currentScript.getAttribute('project'));
 
@@ -169,9 +159,7 @@ var AutoComplete = /** @class */ (function () {
         }
         request.onreadystatechange = function () {
             if (request.readyState == 4 && request.status == 200) {
-                var e = document.getElementsByName("f")[0];
-                var family = encodeURIComponent(e.options[e.selectedIndex].value);
-                params.$Cache[family][queryParams] = request.response;
+                params.$Cache[queryParams] = request.response;
                 callback(request.response);
             }
             else if (request.status >= 400) {
@@ -197,10 +185,7 @@ var AutoComplete = /** @class */ (function () {
         }
     };
     AutoComplete.prototype.cache = function (params, callback, callbackErr) {
-        var e = document.getElementsByName("f")[0];
-        var family = encodeURIComponent(e.options[e.selectedIndex].value);
-
-        var response = params._Cache(family, params._Pre());
+        var response = params._Cache(params._Pre());
         if (response === undefined) {
             var request = AutoComplete.prototype.makeRequest(params, callback, callbackErr);
             AutoComplete.prototype.ajax(params, request);
@@ -429,8 +414,8 @@ var AutoComplete = /** @class */ (function () {
         /**
          * Manage the cache
          */
-        _Cache: function (family, value) {
-            return this.$Cache[family][value];
+        _Cache: function (value) {
+            return this.$Cache[value];
         },
         /**
          * Manage the open

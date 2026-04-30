@@ -9,14 +9,6 @@
     </div>
     <div class="search">
         <form method="GET" action="{{ ident_base_url }}" id="search-form">
-            <select name="f" title="Restricts search to specific file families">
-            {% for id, description in topbar_families.items() %}
-                <option value="{{ id }}" {{ 'selected' if (current_family == id or current_family is not defined) else '' }}>
-                {{ description }}
-                </option>
-            {% endfor %}
-            </select>
-
             <div class="search-controls">
                 <input placeholder="Search Identifier" type="text" id="search-input" name="i"
                     value="{{ searched_ident|default('')|e }}" autofocus required/>
