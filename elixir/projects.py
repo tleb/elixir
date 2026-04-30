@@ -33,32 +33,42 @@ def _tag_pattern_versions(repo_dir: str, pattern: str) -> list[tuple[str, str, b
     ]
 
 
+def _fail_on_unexpected_tags(project, tags):
+    raise ValueError(f"{project}: unexpected tags: {tags}")
+
+
 def _musl_uclibc_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
     pattern = re.compile(r"^v\d+(\.\d+){2}$")
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
         if pattern.match(tag):
             result.append((tag, tag, False))
-        else:
-            break
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("musl/uclibc-ng", unexpected)
     return result
 
 
 def _barebox_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
     skip = re.compile(
-        r"^v2\.0\.0-rc\d+$"
+        r"^v2\.0\.0-rc\d+(-ptx-pdk\d+)?$"
         r"|^freescale-mx35-3-stack-20092611-1$"
         r"|^v2011\.04\.0-phytec-pcm049$"
     )
     pattern = re.compile(r"^v\d+(\.\d+){2}$")
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
         if skip.match(tag):
             continue
         if pattern.match(tag):
             result.append((tag, tag, False))
-        else:
-            break
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("barebox", unexpected)
     return result
 
 
@@ -70,13 +80,16 @@ def _glibc_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
     )
     pattern = re.compile(r"^glibc-\d+(\.\d+){1,2}")
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
         if skip.match(tag):
             continue
         if pattern.match(tag):
             result.append((tag, "v" + tag[6:], False))
-        else:
-            break
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("glibc", unexpected)
     return result
 
 
@@ -84,6 +97,7 @@ def _igt_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
     p1 = re.compile(r"^(intel|igt)-gpu-tools-(.+)")
     p2 = re.compile(r"^v?(\d+(\.\d+){1,2})$")
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
         m = p1.match(tag)
         if m:
@@ -93,7 +107,9 @@ def _igt_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
         if m:
             result.append((tag, "v" + m.group(1), False))
             continue
-        break
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("igt", unexpected)
     return result
 
 
@@ -101,6 +117,7 @@ def _llvm_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
     p1 = re.compile(r"^llvmorg-(\d+(\.\d+){1,2}(-rc\d+)?)$")
     p2 = re.compile(r"^llvmorg-(\d+)-init$")
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
         m = p1.match(tag)
         if m:
@@ -110,7 +127,9 @@ def _llvm_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
         if m:
             result.append((tag, f"v{m.group(1)}.0-init", True))
             continue
-        break
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("llvm", unexpected)
     return result
 
 
@@ -166,6 +185,7 @@ def _mesa_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
     p1 = re.compile(r"^mesa-(\d+((\.|-)\d+){1,2}(-rc\d+)?(-(\d+\.)?\d+)?)$")
     p2 = re.compile(r"^mesa_(\d+(_\d+){1,2}(_rc\d+)?(_\d+)?)$")
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
         if tag.endswith("-branchpoint"):
             continue
@@ -192,21 +212,27 @@ def _mesa_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
         if m:
             result.append((tag, "v" + m.group(1).replace("_", "."), bool(m.group(3))))
             continue
-        break
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("mesa", unexpected)
     return result
 
 
 def _optee_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
     pattern = re.compile(r"^\d+\.\d+\.\d+(-rc\d+)?$")
+    skip_set = {"20160825-for-lmg"}
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
-        if tag == "20160825-for-lmg":
+        if tag in skip_set:
             continue
         m = pattern.match(tag)
         if m:
             result.append((tag, "v" + tag, bool(m.group(1))))
             continue
-        break
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("op-tee", unexpected)
     return result
 
 
@@ -214,6 +240,7 @@ def _uboot_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
     p1 = re.compile(r"^v\d+(\.\d+){1,2}(-rc\d+)?$")
     p2 = re.compile(r"(U-Boot-|U_BOOT_)(\d+_\d+_\d+)")
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
         if (
             tag.endswith("-dont-use")
@@ -229,19 +256,24 @@ def _uboot_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
         if m:
             result.append((tag, "v" + m.group(2).replace("_", "."), False))
             continue
-        break
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("u-boot", unexpected)
     return result
 
 
 def _vpp_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
     pattern = re.compile(r"^v\d+(\.\d+){1,2}(-rc\d+)?$")
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
         m = pattern.match(tag)
         if m:
             result.append((tag, tag, bool(m.group(2))))
             continue
-        break
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("vpp", unexpected)
     return result
 
 
