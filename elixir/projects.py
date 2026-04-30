@@ -494,7 +494,14 @@ PROJECTS["freebsd"].get_versions = _freebsd_get_versions
 PROJECTS["glibc"].get_versions = _glibc_get_versions
 PROJECTS["grub"].get_versions = _grub_get_versions
 PROJECTS["igt"].get_versions = _igt_get_versions
-PROJECTS["iproute2"].get_versions = _default_get_versions
+
+
+def _iproute2_get_versions(repo_dir):
+    p = re.compile(r"^v\d+\.\d+")
+    return [(tag, tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)]
+
+
+PROJECTS["iproute2"].get_versions = _iproute2_get_versions
 PROJECTS["linux"].get_versions = _linux_get_versions
 PROJECTS["llvm"].get_versions = _llvm_get_versions
 PROJECTS["mesa"].get_versions = _mesa_get_versions
