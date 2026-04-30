@@ -220,14 +220,6 @@ def currentProject():
     return os.path.basename(os.path.dirname(getDataDir()))
 
 
-# List all families supported by Elixir
-families = ["A", "B", "C", "D", "K", "M"]
-
-
-def validFamily(family):
-    return family in families
-
-
 def getFileFamily(filename):
     assert isinstance(filename, str)
     name, ext = os.path.splitext(filename)
@@ -245,22 +237,3 @@ def getFileFamily(filename):
         return "M"  # Makefiles
     else:
         return None
-
-
-# 1 char values are file families
-# 2 chars values with a M are macros families
-compatibility_list = {"C": ["C", "K"], "K": ["K"], "D": ["D", "CM"], "M": ["K"]}
-
-
-# Check if families are compatible
-# First argument can be a list of different families
-# Second argument is the key for choosing the right array in the compatibility list
-def compatibleFamily(file_family, requested_family):
-    return any(item in file_family for item in compatibility_list[requested_family])
-
-
-# Check if a macro is compatible with the requested family
-# First argument can be a list of different families
-# Second argument is the key for choosing the right array in the compatibility list
-def compatibleMacro(macro_family, requested_family):
-    return requested_family == "D" and "C" in macro_family
