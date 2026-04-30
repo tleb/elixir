@@ -245,6 +245,151 @@ def _vpp_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
     return result
 
 
+def _amazon_freertos_get_versions(repo_dir):
+    p_ym = re.compile(r"^(\d{4})(\d{2})\.(\d+)$")
+    p_v = re.compile(r"^v\d+\.\d+\.\d+$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        m = p_ym.match(tag)
+        if m:
+            result.append(
+                (tag, f"v{m.group(1)}.{int(m.group(2))}.{int(m.group(3))}", False)
+            )
+            continue
+        if p_v.match(tag):
+            result.append((tag, tag, False))
+    return result
+
+
+def _arm_trusted_firmware_get_versions(repo_dir):
+    p_v = re.compile(r"^v\d+\.\d+")
+    p_for = re.compile(r"^for-v0\.4(.*)$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        if tag.startswith("sandbox/"):
+            continue
+        if tag.startswith("lts-v"):
+            continue
+        m = p_for.match(tag)
+        if m:
+            suffix = m.group(1)
+            result.append((tag, "v0.4" + suffix, "-rc" in suffix))
+            continue
+        if p_v.match(tag):
+            result.append((tag, tag, "-rc" in tag))
+    return result
+
+
+def _bluez_get_versions(repo_dir):
+    p = re.compile(r"^\d+\.\d+$")
+    return [
+        (tag, "v" + tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)
+    ]
+
+
+def _busybox_get_versions(repo_dir):
+    p = re.compile(r"^\d+_\d+(_\d+)?$")
+    return [
+        (tag, "v" + tag.replace("_", "."), False)
+        for tag in _get_tags_sorted(repo_dir)
+        if p.match(tag)
+    ]
+
+
+def _coreboot_get_versions(repo_dir):
+    p = re.compile(r"^\d+\.\d+(\.\d+)?$")
+    return [
+        (tag, "v" + tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)
+    ]
+
+
+def _dpdk_get_versions(repo_dir):
+    p = re.compile(r"^v\d+\.\d+")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        if p.match(tag):
+            result.append((tag, tag, "-rc" in tag))
+    return result
+
+
+def _freebsd_get_versions(repo_dir):
+    p = re.compile(r"^release/(\d+\.\d+\.\d+)$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        m = p.match(tag)
+        if m:
+            result.append((tag, "v" + m.group(1), False))
+    return result
+
+
+def _grub_get_versions(repo_dir):
+    p = re.compile(r"^(grub-)?(\d+\.\d+.*)$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        m = p.match(tag)
+        if m:
+            result.append((tag, "v" + m.group(2), "-rc" in tag))
+    return result
+
+
+def _linux_get_versions(repo_dir):
+    p = re.compile(r"^v\d+\.\d+")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        if p.match(tag):
+            result.append((tag, tag, "-rc" in tag))
+    return result
+
+
+def _ofono_get_versions(repo_dir):
+    p = re.compile(r"^\d+\.\d+$")
+    return [
+        (tag, "v" + tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)
+    ]
+
+
+def _qemu_get_versions(repo_dir):
+    p_v = re.compile(r"^v\d+\.\d+")
+    p_rel = re.compile(r"^release_(\d+(?:_\d+)+)$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        if p_v.match(tag):
+            result.append((tag, tag, "-rc" in tag))
+            continue
+        m = p_rel.match(tag)
+        if m:
+            result.append((tag, "v" + m.group(1).replace("_", "."), False))
+    return result
+
+
+def _toybox_get_versions(repo_dir):
+    p = re.compile(r"^\d+\.\d+(\.\d+)?$")
+    return [
+        (tag, "v" + tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)
+    ]
+
+
+def _xen_get_versions(repo_dir):
+    p = re.compile(r"^RELEASE-(\d+\.\d+.*)$")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        m = p.match(tag)
+        if m:
+            result.append((tag, "v" + m.group(1), False))
+    return result
+
+
+def _zephyr_get_versions(repo_dir):
+    p = re.compile(r"^v\d+\.\d+")
+    result = []
+    for tag in _get_tags_sorted(repo_dir):
+        if tag.startswith("zephyr-v"):
+            continue
+        if p.match(tag):
+            result.append((tag, tag, "-rc" in tag))
+    return result
+
+
 PROJECTS: dict[str, ProjectConfig] = {
     "amazon-freertos": ProjectConfig(
         remotes=["https://github.com/aws/amazon-freertos.git"],
@@ -338,29 +483,29 @@ PROJECTS: dict[str, ProjectConfig] = {
     ),
 }
 
-PROJECTS["amazon-freertos"].get_versions = _default_get_versions
-PROJECTS["arm-trusted-firmware"].get_versions = _default_get_versions
+PROJECTS["amazon-freertos"].get_versions = _amazon_freertos_get_versions
+PROJECTS["arm-trusted-firmware"].get_versions = _arm_trusted_firmware_get_versions
 PROJECTS["barebox"].get_versions = _barebox_get_versions
-PROJECTS["bluez"].get_versions = _default_get_versions
-PROJECTS["busybox"].get_versions = _default_get_versions
-PROJECTS["coreboot"].get_versions = _default_get_versions
-PROJECTS["dpdk"].get_versions = _default_get_versions
-PROJECTS["freebsd"].get_versions = _default_get_versions
+PROJECTS["bluez"].get_versions = _bluez_get_versions
+PROJECTS["busybox"].get_versions = _busybox_get_versions
+PROJECTS["coreboot"].get_versions = _coreboot_get_versions
+PROJECTS["dpdk"].get_versions = _dpdk_get_versions
+PROJECTS["freebsd"].get_versions = _freebsd_get_versions
 PROJECTS["glibc"].get_versions = _glibc_get_versions
-PROJECTS["grub"].get_versions = _default_get_versions
+PROJECTS["grub"].get_versions = _grub_get_versions
 PROJECTS["igt"].get_versions = _igt_get_versions
 PROJECTS["iproute2"].get_versions = _default_get_versions
-PROJECTS["linux"].get_versions = _default_get_versions
+PROJECTS["linux"].get_versions = _linux_get_versions
 PROJECTS["llvm"].get_versions = _llvm_get_versions
 PROJECTS["mesa"].get_versions = _mesa_get_versions
 PROJECTS["musl"].get_versions = _musl_uclibc_get_versions
-PROJECTS["ofono"].get_versions = _default_get_versions
+PROJECTS["ofono"].get_versions = _ofono_get_versions
 PROJECTS["op-tee"].get_versions = _optee_get_versions
 PROJECTS["opensbi"].get_versions = _default_get_versions
-PROJECTS["qemu"].get_versions = _default_get_versions
-PROJECTS["toybox"].get_versions = _default_get_versions
+PROJECTS["qemu"].get_versions = _qemu_get_versions
+PROJECTS["toybox"].get_versions = _toybox_get_versions
 PROJECTS["u-boot"].get_versions = _uboot_get_versions
 PROJECTS["uclibc-ng"].get_versions = _musl_uclibc_get_versions
 PROJECTS["vpp"].get_versions = _vpp_get_versions
-PROJECTS["xen"].get_versions = _default_get_versions
-PROJECTS["zephyr"].get_versions = _default_get_versions
+PROJECTS["xen"].get_versions = _xen_get_versions
+PROJECTS["zephyr"].get_versions = _zephyr_get_versions
