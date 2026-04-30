@@ -98,9 +98,16 @@ Create `elixir/projects.py` with:
 
 3. **`PROJECTS` dict** — keyed by project name (string), valued by `ProjectConfig`.
    Populate `remotes` from `utils/index` lines 118-146. Set `get_versions =
-   _default_get_versions` for all projects initially (will be overridden in steps 2a-c).
+   _default_get_versions` for all projects initially (will be overridden in steps 3a-c).
    Set `dts_comp_support = True` for: `arm-trusted-firmware`, `barebox`, `linux`,
    `u-boot`, `zephyr`.
+
+**Important: `$tags` variable is never set in `script.sh`.** The `list_tags_h()` functions
+reference `$tags` but `script.sh` never populates it — it only calls `shiny_versions()`.
+This means OLD projects currently **cannot be indexed** via `update.py`. The conversions
+in steps 3a-3c are creating **new working code**, not converting existing working code.
+The `list_tags_h` logic must be reverse-engineered, including reconstructing what the old
+`$tags` pipeline would have produced (`git tag | version_dir` or `get_tags`).
 
 Complete list of all 26 projects and their remotes (from `utils/index`):
 
@@ -144,184 +151,133 @@ is importable and `PROJECTS` is usable. No other files are modified yet.
 
 ---
 
-## Step 2a: Convert SHINY projects (10 projects)
+## Step 2: Add version validation script
+
+### Before
+
+`elixir/projects.py` exists with all 26 projects using `_default_get_versions`.
+All project repos are available at `data/<project>/repo`.
+
+### Todo
+
+Create `elixir/check_versions.py` runnable as `python3 -m elixir.check_versions`.
+For each project (or a filtered list via CLI args), call `get_versions(repo_dir)`
+and validate:
+
+- Element 0 (tag) exists as a real git tag in `data/<project>/repo`
+- Element 1 (version) matches `^v\d+\.\d+`
+- Element 2 (is_rc) is a bool
+
+Prints any violations. Exits non-zero if any are found.
+
+### After
+
+`python3 -m elixir.check_versions [project ...]` validates all `get_versions`
+output. **Steps 3a, 3b, 3c must pass `check-versions` without errors before being
+considered complete.** Step 7 (Create CLI) will absorb this as a `./elixir check-versions`
+subcommand.
+
+---
+
+## Version/Tag Semantics (applies to Steps 3a–3c)
+
+`get_versions(repo_dir) -> list[tuple[str, str, bool]]`
+
+- **Element 0: "tag"** — the exact tag string in the git repository.
+  Used by `update.py` as a git ref (e.g. `git ls-tree -r <tag>`).
+  MUST be a real tag that exists in the repo.
+
+- **Element 1: "version"** — a pretty display string starting with `v\d+\.\d+`.
+  Anything can follow that prefix: `-rc1`, `.3`, `-init`, `-beta-3`, `-devel`, etc.
+  The web frontend parses versions to build a 3-level hierarchy
+  (`v5` → `v5.6` → `v5.6.2`).
+
+- **Element 2: `is_rc` (bool)** — `True` if this is a pre-release / release candidate.
+
+For most projects, tag and version are the same string. When they differ, the tag is
+a git-specific naming convention (e.g. `glibc-2.43`, `release/13.3.0`, `1_36_1`) and
+the version is the normalized `v\d+\.\d+...` form.
+
+**Source of truth:** read the corresponding `projects/<name>.sh` file. If it has
+`shiny_versions()`, convert it directly — it already outputs `tag\tversion\tis_rc`.
+If it has `list_tags_h()` or `version_dir()`/`version_rev()`, reverse-engineer the
+full pipeline including how `$tags` would have been populated (`get_tags()` if defined,
+else `git tag | version_dir` if `version_dir` is defined, else `git tag`).
+
+**The old `$tags` variable is never set in `script.sh`** — it only calls
+`shiny_versions()`. This means OLD projects currently cannot be indexed. The conversions
+are creating new working code.
+
+**Verification:** All 26 project repos are available locally at `data/<project>/repo`.
+You can inspect real tags with:
+```
+git -C data/<project>/repo tag --sort=-creatordate
+```
+Use this to validate that your `get_versions` function's tag values (element 0) all
+exist as real git tags, and that the version strings (element 1) follow the
+`v\d+\.\d+...` convention.
+
+---
+
+## Step 3a: Convert SHINY projects (10 projects)
 
 ### Before
 
 `elixir/projects.py` exists with all projects using `_default_get_versions`. 10 projects
 have `shiny_versions()` in their `projects/*.sh` files — these already output the
-`tag\\tdisplay_name\\tis_rc` TSV format that maps directly to the `(tag, display_name,
-is_rc)` tuple format.
+`tag\tversion\tis_rc` TSV format that maps directly to the tuple format.
 
 ### Todo
 
-For each of the 10 projects below, write a custom `get_versions` function and assign it
-to the corresponding entry in `PROJECTS`. Each function takes `repo_dir: str`, runs `git
-tag --sort=-creatordate` via subprocess, filters/transforms the output, and returns
-`list[tuple[str, str, bool]]`.
+For each project below, read its `projects/<name>.sh`, convert `shiny_versions()` to a
+Python `get_versions(repo_dir)` function, and assign it in `PROJECTS`.
 
-**Reference: the `shiny_versions()` shell functions output lines of `tag\\tdisplay_name\\tis_rc`.**
-Convert each one faithfully. The awk patterns translate directly to Python regex + list
-comprehensions.
-
-Projects and their logic:
-
-1. **musl** — Filter to `^v\d+(\.\d+){2}$` exact match. Output `(tag, tag, False)`.
-   Simple: use `_tag_pattern_versions(repo_dir, r"^v\d+(\.\d+){2}$")`.
-
-2. **uclibc-ng** — Identical to musl. Use `_tag_pattern_versions`.
-
-3. **barebox** — Filter to `^v\d+(\.\d+){2}$` but skip: `v2.0.0-rc*`,
-   `freescale-mx35-3-stack-*`, `v2011.04.0-phytec-pcm049`. Output `(tag, tag, False)`.
-
-4. **glibc** — Filter to `^glibc-\d+(\.\d+){1,2}...` but skip `cvs/*`, `fedora/*`,
-   `changelog-ends-here`, and tags with minor version 90 or 9000 (dev branches).
-   Display name: strip `glibc-` prefix, prepend `v`. No RCs. So tag `glibc-2.43`
-   becomes display `v2.43`.
-
-5. **igt** — Four tag naming conventions:
-   - `intel-gpu-tools-X.Y` → display `vX.Y`
-   - `igt-gpu-tools-X.Y` → display `vX.Y`
-   - `X.Y` (no prefix) → display `vX.Y`
-   - `vX.Y` → keep as-is, display `vX.Y`
-   No RCs.
-
-6. **llvm** — Two patterns:
-   - `llvmorg-X.Y.Z[-rcN]` → display `vX.Y.Z`, is_rc if `-rc` present
-   - `llvmorg-X-init` → display `vX.0-init`, always is_rc=True
-
-7. **mesa** — Complex blacklist + two naming conventions. Many individual tags to skip
-   (see `projects/mesa.sh` for the full list). Two match patterns:
-   - `mesa-X.Y.Z[-rcN][-N.N]` → display `vX.Y.Z[-rcN][-N.N]`
-   - `mesa_X_Y_Z[_rcN][_N]` → same with underscores → dots
-   Special cases: `mesa-10.1-devel` (rc), `mesa_3_1_beta_3` (rc), `mesa_3_2_beta_1` (rc).
-
-8. **op-tee** — Skip `20160825-for-lmg`. Match `^\d+\.\d+\.\d+(-rc\d+)?$`. Display name:
-   prepend `v` to the tag. is_rc if `-rc` present.
-
-9. **u-boot** — Two tag styles:
-   - `vX.Y.Z[-rcN]` → display same, is_rc if `-rc`
-   - `(U-Boot-|U_BOOT_)X_Y_Z` → display `vX.Y.Z`, no RC
-   Skip: `*-dont-use`, `LABEL_*`, `DENX-*`.
-
-10. **vpp** — Match `^v\d+(\.\d+){1,2}(-rc\d+)?$`. Display same as tag. is_rc if `-rc`.
+Projects: **musl**, **uclibc-ng**, **barebox**, **glibc**, **igt**, **llvm**, **mesa**,
+**op-tee**, **u-boot**, **vpp**.
 
 ### After
 
-All 10 SHINY projects have custom `get_versions` functions in `elixir/projects.py`
-that faithfully reproduce their shell `shiny_versions()` output. The remaining 16
-projects still use `_default_get_versions`.
+All 10 SHINY projects have custom `get_versions` functions. The remaining 16 projects
+still use `_default_get_versions`.
+
+**Gate:** `python3 -m elixir.check_versions` must pass for all converted projects.
 
 ---
 
-## Step 2b: Convert OLD projects (14 projects)
+## Step 3b: Convert OLD projects (14 projects)
 
 ### Before
 
-14 projects have only `list_tags_h()` (and sometimes `version_dir()`/`version_rev()`)
-in their shell plugins. These use the old 3-column hierarchical format
-(`top middle tag`) which is different from the `shiny_versions` format. They need to be
-converted to output `[(tag, display_name, is_rc)]` tuples.
+14 projects have only `list_tags_h()` and/or `version_dir()`/`version_rev()` in their
+shell plugins — no `shiny_versions()`. The `list_tags_h` outputs a 3-column hierarchy
+that was consumed by the old web frontend. The new `get_versions` returns flat
+`(tag, version, is_rc)` tuples; the web app builds the hierarchy from versions.
 
 ### Todo
 
-Write a custom `get_versions` for each project. The old `list_tags_h()` outputs 3-column
-lines like `v3 v3.1 v3.1-rc10` where column 1 is the top-level menu, column 2 is the
-submenu, and column 3 is the full tag. The new format needs `(tag, display_name, is_rc)`
-where `display_name` is what the user sees (typically the full tag with `v` prefix).
+For each project below, read its `projects/<name>.sh`, reverse-engineer the full tag
+pipeline, and write a `get_versions(repo_dir)` function. See "Version/Tag Semantics"
+above for tuple format.
 
-**General approach for `list_tags_h` conversions:** The old `list_tags_h` splits tags
-into a 3-level hierarchy. For the new format, we need to determine:
-- The actual git tag (column 3 in old format)
-- The display name (usually same as the tag, sometimes with minor adjustments)
-- Whether it's a release candidate (look for `-rc` in the tag)
-
-**Note on `$tags` variable:** In `script.sh`, `$tags` is populated by `get_tags()` (if
-defined) or `git tag | version_dir` (if `version_dir` is defined) or just `git tag`. The
-`get_versions` functions must replicate the same tag source + filtering pipeline.
-
-Projects and their logic:
-
-1. **amazon-freertos** — Source: `git tag` (no `get_tags` or `version_dir`).
-   Two groups: non-`v`-prefixed tags (`YYYYMM...` format) and `v`-prefixed tags.
-   Each group sorted newest-first, split into 3-level hierarchy.
-   Convert to: all tags, sorted by creatordate descending, with appropriate display
-   names. Non-RC.
-
-2. **arm-trusted-firmware** — Source: `git tag`. Two groups: normal `vX.Y.Z` tags
-   (exclude `for-v0.4`) and `for-v0.4` tags (placed under `custom` top-level).
-   The `for-v0.4` tags need special display naming.
-
-3. **bluez** — Source: `git tag` filtered to `^[0-9]` (numeric-starting only).
-   Sorted `sort -rV`, split into `vMAJOR vMAJOR.MINOR MAJOR.MINOR` hierarchy.
-   Display name is the tag itself (e.g. `4.112`). Non-RC.
-
-4. **busybox** — Source: `git tag | version_dir` where `version_dir` swaps `_` and `.`.
-   So tags like `1_36_1` become `1.36.1`. Display names: `vMAJOR.MAJOR.MINOR[-suffix]`.
-   Non-RC.
-
-5. **coreboot** — Source: `git tag`. Simple `X.Y.Z` tags. Display: `vX vX.Y X.Y.Z`.
-   Non-RC.
-
-6. **dpdk** — Source: `git tag`. Two groups:
-   - `v3+` tags → normal hierarchy `vMAJOR vMAJOR.MINOR tag`
-   - `v1.`/`v2.` tags → under `old` prefix
-   Non-RC.
-
-7. **freebsd** — Has only `version_dir()` and `version_rev()` (no `list_tags_h`).
-   `version_dir` filters `release/X.Y.Z` tags, strips `release/` prefix, strips
-   trailing `.0`. So `release/13.3.0` → `v13.3`. The `get_versions` function must
-   replicate this: get all tags matching `^release/\d+\.\d+\.\d+$`, strip prefix,
-   strip trailing `.0`, use as both tag and display name. Non-RC.
-
-8. **grub** — Source: `git tag`. Tags may or may not have `grub-` prefix.
-   Pattern: `(grub-)?MAJOR.MINOR[suffix]`. Display: strip optional prefix, prepend
-   `v` to major. Non-RC.
-
-9. **linux** — Source: `get_tags()` which does complex sorting via
-   `version_dir | sed | sort -V | sed`. `version_dir` is a no-op filter on git tags.
-   The `get_tags` pipeline handles `pre` and `lia64-` prefixed tags and sorts with
-   `sort -V`. Then `list_tags_h` splits into `vMAJOR vMAJOR.MINOR fulltag` hierarchy.
-   Tags like `v6.12-rc1` have is_rc=True. Tags like `pre-v2.5` and `lia64-2.6.0` need
-   special handling.
-   **This is the most complex project.** Study `projects/linux.sh` carefully.
-   The `get_tags()` function must be faithfully reproduced — it normalizes tags for
-   `sort -V` then strips the normalization markers.
-
-10. **ofono** — Source: `git tag`. Simple `X.Y.Z` tags. Display: `vX vX.Y X.Y.Z`.
-    Non-RC.
-
-11. **qemu** — Source: `git tag`. Three groups:
-    - `vX.Y` tags → `vX vX.Y tag`
-    - `release_*` tags → `old release release_TAG`
-    - Synthetic entry: `old initial initial` (not a real tag)
-    Non-RC.
-
-12. **toybox** — Source: `git tag`. `X.Y.Z` tags (no `v` prefix on tag itself).
-    Display: `MAJOR MAJOR.MINOR tag`. Non-RC.
-
-13. **xen** — Has only `version_dir()` and `version_rev()` (no `list_tags_h`).
-    `version_dir` filters `RELEASE-*` tags, strips `RELEASE-` prefix, prepends `v`.
-    So `RELEASE-4.19.0` → `v4.19.0`. The `get_versions` function must replicate this.
-    Non-RC.
-
-14. **zephyr** — Source: `git tag` filtered to exclude `^zephyr-v` prefixed tags.
-    Then standard `vX.Y.Z[-rc]` hierarchy. is_rc if `-rc` present.
+Projects: **amazon-freertos**, **arm-trusted-firmware**, **bluez**, **busybox**,
+**coreboot**, **dpdk**, **freebsd**, **grub**, **linux**, **ofono**, **qemu**,
+**toybox**, **xen**, **zephyr**.
 
 ### After
 
 All 14 OLD projects have custom `get_versions` functions. Combined with step 2a, 24 of
-26 projects now have proper version listing. The remaining 2 (iproute2, opensbi) will be
-handled in step 2c.
+26 projects now have proper version listing.
+
+**Gate:** `python3 -m elixir.check_versions` must pass for all converted projects.
 
 ---
 
-## Step 2c: Configure EMPTY projects (2 projects)
+## Step 3c: Configure EMPTY projects (2 projects)
 
 ### Before
 
 2 projects (`iproute2`, `opensbi`) have empty shell plugins (0 bytes). They use the
-default behavior: `git tag | sort -V` with no filtering.
+default behavior with no filtering.
 
 ### Todo
 
@@ -336,9 +292,11 @@ All 26 projects have correct `get_versions` implementations. `elixir/projects.py
 complete and can fully replace `projects/*.sh` and the hardcoded remote list in
 `utils/index`.
 
+**Gate:** `python3 -m elixir.check_versions` must pass for all 26 projects.
+
 ---
 
-## Step 3: Rewrite `elixir/lib.py` internals
+## Step 4: Rewrite `elixir/lib.py` internals
 
 ### Before
 
@@ -383,6 +341,13 @@ Modify `script()`:
   project)` which routes to Python implementations
 - The `env` parameter is kept for backward compat but ignored
 
+**Also update `scriptLines()`** to forward the new kwargs:
+```python
+def scriptLines(*args, repo_dir=None, project=None, env=None):
+    p = script(*args, repo_dir=repo_dir, project=project, env=env)
+    ...
+```
+
 Implement `_dispatch(cmd, opts, repo_dir, project)` routing:
 
 | `cmd` | Python function | Implementation notes |
@@ -397,7 +362,34 @@ Implement `_dispatch(cmd, opts, repo_dir, project)` routing:
 | `parse-comps` | `_parse_comps(opts, repo_dir)` | Import `FindCompatibleDTS` directly, no subprocess |
 | `dts-comp` | returns `projects.PROJECTS[project].dts_comp_support` | Simple dict lookup |
 
-#### 3.3 Implementation details for each command
+**Dropped commands** (dead code, not called by any Python code):
+- `get-blob` — no call site found
+- `untokenize` — no call site found
+- `parse-docs` — no call site found (only used `find-file-doc-comments.pl`)
+
+**`_list_blobs` details:** Three modes:
+- `-p`: return `hash path` (blob hash + full path)
+- `-f`: return `hash filename` (blob hash + basename)
+- default (first arg is a version tag): return `hash` only (not used by `update.py` but
+  include for completeness)
+
+#### 3.3 Helper: denormalize
+
+`script.sh:206-209` defines `denormalize()` which strips the leading `/` from path
+arguments. It is used by `get_type`, `get_file`, `get_dir`, and `tokenize_file`. Without
+this, git commands like `git cat-file blob "v5.6:/Makefile"` fail — the path must be
+`v5.6:Makefile`.
+
+Implement as a helper:
+```python
+def _denormalize(path):
+    return path[1:]  # strip leading /
+```
+
+Use it in `_get_type`, `_get_file`, `_get_dir`, and `_tokenize_file` when constructing
+git refs like `f"{tag}:{_denormalize(path)}"`.
+
+#### 3.4 Implementation details for each command
 
 **`_list_blobs(opts, repo_dir)`:**
 - `opts[0]` is `-p` (path) or `-f` (filename) or a version tag
@@ -407,44 +399,63 @@ Implement `_dispatch(cmd, opts, repo_dir, project)` routing:
 
 **`_tokenize_file(opts, repo_dir)`:**
 - `opts[0]` is `-b` (blob hash) or a version tag
-- If `-b`, ref = `opts[1]`; else ref = `tag:path`
+- If `-b`, ref = `opts[1]`; else ref = `f"{tag}:{_denormalize(path)}"`
 - Get blob content via `git cat-file blob <ref>`
-- For D (devicetree) family: use regex with `[\w-]+` instead of `\w+`
+- For D (devicetree) family: both the non-token alternation group and the token capture
+  group change: `[^\w-]` (doesn't match `-`) instead of `\W`, and `[\w-]+` instead of
+  `\w+`. This prevents splitting on hyphens in devicetree property names.
 - Translate the Perl regex to Python:
   ```
-  s%((/\*.*?\*/|//.*?\001|[^'"'"']"(\\.|.)*?"|# *include *<.*?>|\W)+)(\w+)?%\1\n\4\n%g
+  Non-D: s%((/\*.*?\*/|//.*?\001|[^'"'"']"(\\.|.)*?"|# *include *<.*?>|\W)+)(\w+)?%\1\n\4\n%g
+  D:     s%((/\*.*?\*/|//.*?\001|[^'"'"']"(\\.|.)*?"|# *include *<.*?>|[^\w-])+)([\w-]+)?%\1\n\4\n%g
   ```
-  This becomes a Python `re.sub()` with the same pattern adapted for Python syntax.
+  **This is the highest-risk translation in the plan.** The regex uses Perl-specific
+  features. Test against real source files after implementation.
 
 **`_parse_defs(opts, repo_dir)`:**
-- `opts[2]` is the file family: C, K, or D
-- Write blob to temp file, run `ctags -x` via subprocess
-- For C: additionally use Python `re` for ENTRY() and SYSCALL_DEFINE patterns instead of
-  perl one-liners:
+- `opts[0]` = blob hash, `opts[1]` = filename, `opts[2]` = file family (C, K, or D)
+- Write blob to temp file (preserve the original filename including extension — ctags
+  uses it for language detection). Create as `tmpdir/filename`.
+- **Family C:** Run `ctags -x --kinds-c=+p+x --extras='-{anonymous}' <file>`. Filter
+  output: exclude lines starting with `operator ` or `CONFIG_` (the `grep -avE` at
+  `script.sh:141`). Parse remaining lines: `name type lineno`. Then additionally scan
+  for ENTRY/SYSCALL macros using Python `re` instead of perl:
   - `^\s*ENTRY\((\w+)\)` → `\1 function LINE`
   - `^SYSCALL_DEFINE\d\(\s*(\w+)\W` → `sys_\1 function LINE`
+- **Family K:** Run `ctags -x --language-force=kconfig --kinds-kconfig=c
+  --extras-kconfig=-{configPrefixed} <file>`. Parse lines, prepend `CONFIG_` to each
+  name.
+- **Family D:** Run `ctags -x --language-force=dts <file>`. Parse lines as-is.
 
 **`_parse_comps(opts, repo_dir)`:**
 - Get blob content via `git cat-file blob <hash>`
-- Import `FindCompatibleDTS` from `find_compatible_dts.py` (move it to `elixir/` or
-  adjust import path)
+- Import `FindCompatibleDTS` directly from `find_compatible_dts.py` — **move this file
+  into `elixir/` package** and change its import from `from elixir.lib import decode` to
+  `from .lib import decode`. Then `from .find_compatible_dts import FindCompatibleDTS`.
 - Call `FindCompatibleDTS().run(lines, family)` directly
 
 **`_get_type(opts, repo_dir)`:**
-- `git cat-file -t "<tag>:<path>"` via subprocess
+- `git cat-file -t "<tag>:<denormalized_path>"` via subprocess (strip leading `/`)
 
 **`_get_file(opts, repo_dir)`:**
-- `git cat-file blob "<tag>:<path>"` via subprocess
+- `git cat-file blob "<tag>:<denormalized_path>"` via subprocess
 
 **`_get_dir(opts, repo_dir)`:**
-- `git ls-tree -l "<tag>:<path>"` via subprocess
-- Parse in Python (replace awk/sort pipeline)
+- `git ls-tree -l "<tag>:<denormalized_path>"` via subprocess
+- Parse in Python (replace awk/sort pipeline from `script.sh:54-59`)
+- awk `{print $2" "$5" "$4" "$1}` maps to: `type size hash name`
+- `grep -v ' \.'` removes dot-prefixed entries (hidden files)
+- `sort -t ' ' -k 1,1r -k 2,2` sorts: trees first (reversed), then by name
 
-#### 3.4 Keep unchanged
+#### 3.5 Keep unchanged
 
 - `blacklist`, `isIdent()`, `autoBytes()`, `getFileFamily()`, `decode()`, `unescape()`,
   `CURRENT_DIR` — these are pure Python utilities used elsewhere.
 - The `run_cmd()` helper.
+
+**Note:** Steps 1-2c create `elixir/projects.py` which isn't imported by anything yet.
+These steps produce no behavioral change and cannot be tested until Step 4 is complete.
+The commit after each is a checkpoint, not a working state.
 
 ### After
 
@@ -456,7 +467,7 @@ modification. `getDataDir()` and `getRepoDir()` read from module state (set by
 
 ---
 
-## Step 4: Modify `elixir/update.py`
+## Step 5: Modify `elixir/update.py`
 
 ### Before
 
@@ -496,7 +507,7 @@ is unchanged.
 
 ---
 
-## Step 5: Modify `elixir/query.py`
+## Step 6: Modify `elixir/query.py`
 
 ### Before
 
@@ -511,21 +522,31 @@ is unchanged.
 
 1. **Import projects**: Add `from . import projects` at top.
 
-2. **`Query.__init__`**: Replace line 67:
+2. **`Query.__init__`**: Add `project` parameter (optional, defaults to `None` for backward
+   compat with `utils/query.py` and `utils/speedtest.py` which will be deleted in Step 8).
+   Store it and use it:
    ```python
-   self.dts_comp_support = projects.PROJECTS[project].dts_comp_support
+   def __init__(self, data_dir, repo_dir, project=None):
+       self.repo_dir = repo_dir
+       self.data_dir = data_dir
+       self.project = project
+       if project:
+           self.dts_comp_support = projects.PROJECTS[project].dts_comp_support
+       else:
+           self.dts_comp_support = 0
    ```
-   This requires adding a `project` parameter to `__init__`. Update `get_query()`
-   factory to pass it through.
+   When `project` is `None` (legacy callers), `dts_comp_support` defaults to `0` (disabled).
+   The `project` is also needed by `_dispatch` for the `versions` command, which calls
+   `projects.PROJECTS[project].get_versions(repo_dir)`.
 
 3. **`Query.script()` / `Query.scriptLines()`**: Replace `env=self.getEnv()` with
-   `repo_dir=self.repo_dir`:
+   `repo_dir` and `project` kwargs:
    ```python
    def script(self, *args):
-       return script(*args, repo_dir=self.repo_dir)
+       return script(*args, repo_dir=self.repo_dir, project=self.project)
 
    def scriptLines(self, *args):
-       return scriptLines(*args, repo_dir=self.repo_dir)
+       return scriptLines(*args, repo_dir=self.repo_dir, project=self.project)
    ```
 
 4. **Remove `getEnv()`** entirely.
@@ -549,7 +570,7 @@ app (`web.py`) continues to work unchanged because `get_query()` signature is th
 
 ---
 
-## Step 6: Create `./elixir` CLI
+## Step 7: Create `./elixir` CLI
 
 ### Before
 
@@ -571,6 +592,7 @@ Subcommands:
 elixir fetch  <data_path> [project...] [--gc {auto,aggressive}]
 elixir index  <data_path> [project...]
 elixir update <data_path> [project...] [--gc {auto,aggressive}]
+elixir check-versions <data_path> [project...]
 elixir stats    <data_path> <project>
 elixir versions <data_path> <project>
 elixir ident    <data_path> <project> <version> <ident>
@@ -593,6 +615,7 @@ For each project:
 3. `git fetch --all --tags -j4` in the repo dir
 4. GC: `--gc aggressive` runs `git gc --aggressive`; `--gc auto` (default) runs
    `git gc --auto`. Also run aggressive GC if `gc.log` exists in the repo.
+   The old `ELIXIR_GC` env var is intentionally **not** supported — use `--gc aggressive`.
 
 **`index` subcommand:**
 For each project:
@@ -629,6 +652,10 @@ For each project:
 2. Import and run the speedtest logic from `utils/speedtest.py`, adapted to take
    `data_dir`/`repo_dir`/`project` as arguments instead of reading env vars
 
+**`check-versions` subcommand:**
+1. Import and run the validation logic from `elixir/check_versions.py` (created in
+   Step 2), wrapping it as a CLI subcommand.
+
 ### After
 
 A single `./elixir` executable replaces `utils/index`, `utils/query.py`, and
@@ -637,7 +664,7 @@ importing the elixir Python package and calling functions directly.
 
 ---
 
-## Step 7: Delete old files
+## Step 8: Delete old files
 
 ### Before
 
@@ -680,6 +707,27 @@ After all steps are complete:
    functions instead of spawning shell scripts
 5. **Backward compat** — `python3 -m elixir.update` still works with env vars (for
    existing deployments), `web.py` is untouched
+
+### Testing strategy
+
+After Step 4 (the riskiest step), verify against a real project:
+```bash
+# Set up test data (use a small project like musl)
+export LXR_DATA_DIR=/path/to/musl/data LXR_REPO_DIR=/path/to/musl/repo
+
+# Test version listing
+python3 -c "from elixir import lib; lib.configure('$LXR_DATA_DIR', '$LXR_REPO_DIR', 'musl'); print(lib.scriptVersions())"
+
+# Test tokenize_file (the highest-risk regex translation)
+python3 -c "from elixir import lib; lib.configure(...); print(len(lib.scriptLines('tokenize-file', '-b', '<some_hash>', 'C')))"
+```
+
+After Step 7, verify the CLI:
+```bash
+./elixir versions /path/to/data musl
+./elixir stats /path/to/data musl
+./elixir ident /path/to/data musl latest memcpy
+```
 
 ### What was done & issues encountered
 
