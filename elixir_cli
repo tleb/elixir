@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+import subprocess
+import sys
+
+
+def _discover_projects(data_path, project_names):
+    from elixir.projects import PROJECTS
+
+    if project_names:
+        for name in project_names:
+            if name not in PROJECTS:
+                print(f"unknown project: {name}", file=sys.stderr)
+                sys.exit(1)
+        return project_names
+    found = []
+    for entry in sorted(os.listdir(data_path)):
+        if entry in PROJECTS and os.path.isdir(os.path.join(data_path, entry)):
+            found.append(entry)
+    if not found:
+        print(f"no projects found in {data_path}", file=sys.stderr)
+        sys.exit(1)
+    return found
+
+
+def _project_init(data_path, project):
+    project_dir = os.path.join(data_path, project)
+    repo_dir = os.path.join(project_dir, "repo")
+    data_dir = os.path.join(project_dir, "data")
+
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(repo_dir, exist_ok=True)
+
+    if not os.path.exists(os.path.join(repo_dir, "HEAD")):
+        subprocess.run(
+            ["git", "init", "--bare", repo_dir],
+            check=True,
+            capture_output=True,
+        )
+
+
+def _project_add_remotes(data_path, project):
+    from elixir.projects import PROJECTS
+
+    project_dir = os.path.join(data_path, project)
+    repo_dir = os.path.join(project_dir, "repo")
+    config = PROJECTS[project]
+
+    existing_urls = set()
+    remotes_out = subprocess.run(
+        ["git", "-C", repo_dir, "remote"],
+        capture_output=True,
+        text=True,
+    )
+    for remote_name in remotes_out.stdout.splitlines():
+        if not remote_name:
+            continue
+        url_out = subprocess.run(
+            ["git", "-C", repo_dir, "remote", "get-url", remote_name],
+            capture_output=True,
+            text=True,
+        )
+        if url_out.returncode == 0:
+            existing_urls.add(url_out.stdout.strip())
+
+    i = 0
+    for url in config.remotes:
+        if url in existing_urls:
+            continue
+        while True:
+            name = f"remote{i}"
+            check = subprocess.run(
+                ["git", "-C", repo_dir, "remote"],
+                capture_output=True,
+                text=True,
+            )
+            if name not in check.stdout.splitlines():
+                break
+            i += 1
+        subprocess.run(
+            ["git", "-C", repo_dir, "remote", "add", name, url],
+            check=True,
+        )
+        i += 1
+
+
+def _project_fetch(data_path, project, gc_mode):
+    from elixir.projects import PROJECTS
+
+    project_dir = os.path.join(data_path, project)
+    repo_dir = os.path.join(project_dir, "repo")
+
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            repo_dir,
+            "-c",
+            f"safe.directory={repo_dir}",
+            "fetch",
+            "--all",
+            "--tags",
+            "-j4",
+        ],
+        check=True,
+    )
+
+    gc_log = os.path.join(repo_dir, "gc.log")
+    if gc_mode == "aggressive" or os.path.exists(gc_log):
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                repo_dir,
+                "-c",
+                f"safe.directory={repo_dir}",
+                "gc",
+                "--aggressive",
+            ],
+            check=False,
+        )
+    else:
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                repo_dir,
+                "-c",
+                f"safe.directory={repo_dir}",
+                "gc",
+                "--auto",
+            ],
+            check=False,
+        )
+
+
+def _project_index(data_path, project):
+    from elixir import lib, update
+
+    project_dir = os.path.join(data_path, project)
+    data_dir = os.path.join(project_dir, "data")
+    repo_dir = os.path.join(project_dir, "repo")
+
+    lib.configure(data_dir, repo_dir, project)
+    update.main()
+
+
+def cmd_fetch(args):
+    projects = _discover_projects(args.data_path, args.project)
+    for project in projects:
+        print(f"Fetching {project}...")
+        _project_init(args.data_path, project)
+        _project_add_remotes(args.data_path, project)
+        _project_fetch(args.data_path, project, args.gc)
+
+
+def cmd_index(args):
+    projects = _discover_projects(args.data_path, args.project)
+    for project in projects:
+        print(f"Indexing {project}...")
+        _project_index(args.data_path, project)
+
+
+def cmd_update(args):
+    projects = _discover_projects(args.data_path, args.project)
+    for project in projects:
+        print(f"Updating {project}...")
+        _project_init(args.data_path, project)
+        _project_add_remotes(args.data_path, project)
+        _project_fetch(args.data_path, project, args.gc)
+
+        project_dir = os.path.join(args.data_path, project)
+        data_dir = os.path.join(project_dir, "data")
+        has_data = any(os.listdir(data_dir)) if os.path.isdir(data_dir) else False
+
+        if not has_data:
+            _project_index(args.data_path, project)
+            _project_fetch(args.data_path, project, args.gc)
+            _project_index(args.data_path, project)
+        else:
+            _project_index(args.data_path, project)
+
+
+def cmd_check_versions(args):
+    from elixir.check_versions import check_versions
+
+    ok = check_versions(args.data_path, args.project or None)
+    sys.exit(0 if ok else 1)
+
+
+def _get_query(args):
+    from elixir.query import Query
+
+    data_dir = os.path.join(args.data_path, args.project, "data")
+    repo_dir = os.path.join(args.data_path, args.project, "repo")
+    return Query(data_dir, repo_dir, args.project)
+
+
+def cmd_stats(args):
+    q = _get_query(args)
+
+    def fetch(sql):
+        return q.ddb.execute(sql).fetchone()[0]
+
+    print(f"Versions:    {fetch('SELECT COUNT(*) FROM versions'):10d}")
+    print(f"Blobs:       {fetch('SELECT COUNT(*) FROM blobs'):10d}")
+    print(f"Definitions: {fetch('SELECT COUNT(*) FROM defs'):10d}")
+    print(f"References:  {fetch('SELECT COUNT(*) FROM refs'):10d}")
+
+
+def cmd_versions(args):
+    q = _get_query(args)
+    for major in q.get_versions().values():
+        for minor in major.values():
+            for v in minor:
+                print(v)
+
+
+def cmd_ident(args):
+    q = _get_query(args)
+    defs, refs, doccomments, _ = q.search_ident(args.version, args.ident)
+    print("Symbol Definitions:")
+    for d in defs:
+        print(d)
+    print("\nSymbol References:")
+    for r in refs:
+        print(r)
+    print("\nDocumented in:")
+    for dc in doccomments:
+        print(dc)
+
+
+def cmd_file(args):
+    q = _get_query(args)
+    code = q.get_tokenized_file(args.version, args.path)
+    print(code)
+
+
+def cmd_speedtest(args):
+    from time import time
+
+    BOLD = "\033[1m"
+    NORMAL = "\033[0m"
+
+    project = args.project
+    q = _get_query(args)
+
+    run_number = 100
+    verbose = args.verbose
+
+    idents = [
+        "loopback",
+        "devm_register_reboot_notifier",
+        "notrace",
+        "arch_local_irq_restore",
+        "blk_queue_dma_alignment",
+        "spinlock_t",
+        "max",
+        "task_struct",
+        "eth_header",
+        "sk_buff",
+    ]
+
+    versions = ["latest", "latest-rc"]
+
+    print((BOLD + "Database test for project {}" + NORMAL).format(project))
+    print(f"Each test runs {run_number} times")
+
+    for version in versions:
+        print((BOLD + f"\nVersion tested : {version}\n" + NORMAL))
+
+        print(BOLD + "Identifiers access test\n" + NORMAL)
+        results = []
+        for _ in range(run_number):
+            for ident in idents:
+                start = time()
+                q.search_ident(version, ident)
+                elapsed = (time() - start) * 1000
+                results.append(elapsed)
+                if verbose:
+                    print(f"Identifier : {ident}")
+                    print(f"Elapsed time : {elapsed:.6f} ms\n")
+
+        print(
+            (
+                BOLD
+                + "Min:"
+                + NORMAL
+                + " {0:.6f} ms\n"
+                + BOLD
+                + "Max:"
+                + NORMAL
+                + " {1:.6f} ms\n"
+                + BOLD
+                + "Average:"
+                + NORMAL
+                + " {2:.6f} ms\n"
+            ).format(min(results), max(results), sum(results) / len(results))
+        )
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="elixir",
+        description="Elixir source code cross-referencer",
+    )
+    subparsers = parser.add_subparsers(required=True)
+
+    p = subparsers.add_parser("fetch", help="Fetch project repositories")
+    p.add_argument("data_path", help="Root data directory")
+    p.add_argument("project", nargs="*", help="Projects to fetch (default: all)")
+    p.add_argument("--gc", choices=["auto", "aggressive"], default="auto")
+    p.set_defaults(func=cmd_fetch)
+
+    p = subparsers.add_parser("index", help="Index fetched data")
+    p.add_argument("data_path", help="Root data directory")
+    p.add_argument("project", nargs="*", help="Projects to index (default: all)")
+    p.set_defaults(func=cmd_index)
+
+    p = subparsers.add_parser("update", help="Fetch and index (full update)")
+    p.add_argument("data_path", help="Root data directory")
+    p.add_argument("project", nargs="*", help="Projects to update (default: all)")
+    p.add_argument("--gc", choices=["auto", "aggressive"], default="auto")
+    p.set_defaults(func=cmd_update)
+
+    p = subparsers.add_parser("check-versions", help="Validate version listings")
+    p.add_argument("data_path", help="Root data directory")
+    p.add_argument("project", nargs="*", help="Projects to check (default: all)")
+    p.set_defaults(func=cmd_check_versions)
+
+    p = subparsers.add_parser("stats", help="Show database statistics")
+    p.add_argument("data_path", help="Root data directory")
+    p.add_argument("project", help="Project name")
+    p.set_defaults(func=cmd_stats)
+
+    p = subparsers.add_parser("versions", help="List project versions")
+    p.add_argument("data_path", help="Root data directory")
+    p.add_argument("project", help="Project name")
+    p.set_defaults(func=cmd_versions)
+
+    p = subparsers.add_parser("ident", help="Look up identifier")
+    p.add_argument("data_path", help="Root data directory")
+    p.add_argument("project", help="Project name")
+    p.add_argument("version", help="Version tag")
+    p.add_argument("ident", help="Identifier name")
+    p.set_defaults(func=cmd_ident)
+
+    p = subparsers.add_parser("file", help="Show tokenized source file")
+    p.add_argument("data_path", help="Root data directory")
+    p.add_argument("project", help="Project name")
+    p.add_argument("version", help="Version tag")
+    p.add_argument("path", help="File path")
+    p.set_defaults(func=cmd_file)
+
+    p = subparsers.add_parser("speedtest", help="Run query benchmarks")
+    p.add_argument("data_path", help="Root data directory")
+    p.add_argument("project", help="Project name")
+    p.add_argument("-v", "--verbose", action="store_true")
+    p.set_defaults(func=cmd_speedtest)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
