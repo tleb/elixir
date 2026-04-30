@@ -390,47 +390,64 @@ def _zephyr_get_versions(repo_dir):
     return result
 
 
+def _iproute2_get_versions(repo_dir):
+    p = re.compile(r"^v\d+\.\d+")
+    return [(tag, tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)]
+
+
 PROJECTS: dict[str, ProjectConfig] = {
     "amazon-freertos": ProjectConfig(
         remotes=["https://github.com/aws/amazon-freertos.git"],
+        get_versions=_amazon_freertos_get_versions,
     ),
     "arm-trusted-firmware": ProjectConfig(
         remotes=["https://github.com/ARM-software/arm-trusted-firmware"],
         dts_comp_support=True,
+        get_versions=_arm_trusted_firmware_get_versions,
     ),
     "barebox": ProjectConfig(
         remotes=["https://git.pengutronix.de/git/barebox"],
         dts_comp_support=True,
+        get_versions=_barebox_get_versions,
     ),
     "bluez": ProjectConfig(
         remotes=["https://git.kernel.org/pub/scm/bluetooth/bluez.git"],
+        get_versions=_bluez_get_versions,
     ),
     "busybox": ProjectConfig(
         remotes=["https://git.busybox.net/busybox"],
+        get_versions=_busybox_get_versions,
     ),
     "coreboot": ProjectConfig(
         remotes=["https://review.coreboot.org/coreboot.git"],
+        get_versions=_coreboot_get_versions,
     ),
     "dpdk": ProjectConfig(
         remotes=[
             "https://dpdk.org/git/dpdk",
             "https://dpdk.org/git/dpdk-stable",
         ],
+        get_versions=_dpdk_get_versions,
     ),
     "freebsd": ProjectConfig(
         remotes=["https://git.freebsd.org/src.git"],
+        get_versions=_freebsd_get_versions,
     ),
     "glibc": ProjectConfig(
         remotes=["https://sourceware.org/git/glibc.git"],
+        get_versions=_glibc_get_versions,
     ),
     "grub": ProjectConfig(
         remotes=["https://git.savannah.gnu.org/git/grub.git"],
+        get_versions=_grub_get_versions,
     ),
     "igt": ProjectConfig(
         remotes=["https://gitlab.freedesktop.org/drm/igt-gpu-tools.git"],
+        get_versions=_igt_get_versions,
     ),
     "iproute2": ProjectConfig(
         remotes=["https://git.kernel.org/pub/scm/network/iproute2/iproute2.git"],
+        get_versions=_iproute2_get_versions,
     ),
     "linux": ProjectConfig(
         remotes=[
@@ -439,80 +456,60 @@ PROJECTS: dict[str, ProjectConfig] = {
             "https://github.com/bootlin/linux-history.git",
         ],
         dts_comp_support=True,
+        get_versions=_linux_get_versions,
     ),
     "llvm": ProjectConfig(
         remotes=["https://github.com/llvm/llvm-project.git"],
+        get_versions=_llvm_get_versions,
     ),
     "mesa": ProjectConfig(
         remotes=["https://gitlab.freedesktop.org/mesa/mesa.git"],
+        get_versions=_mesa_get_versions,
     ),
     "musl": ProjectConfig(
         remotes=["https://git.musl-libc.org/git/musl"],
+        get_versions=_musl_uclibc_get_versions,
     ),
     "ofono": ProjectConfig(
         remotes=["https://git.kernel.org/pub/scm/network/ofono/ofono.git"],
+        get_versions=_ofono_get_versions,
     ),
     "op-tee": ProjectConfig(
         remotes=["https://github.com/OP-TEE/optee_os.git"],
+        get_versions=_optee_get_versions,
     ),
     "opensbi": ProjectConfig(
         remotes=["https://github.com/riscv-software-src/opensbi"],
+        get_versions=_default_get_versions,
     ),
     "qemu": ProjectConfig(
         remotes=["https://gitlab.com/qemu-project/qemu.git"],
+        get_versions=_qemu_get_versions,
     ),
     "toybox": ProjectConfig(
         remotes=["https://github.com/landley/toybox.git"],
+        get_versions=_toybox_get_versions,
     ),
     "u-boot": ProjectConfig(
         remotes=["https://source.denx.de/u-boot/u-boot.git"],
         dts_comp_support=True,
+        get_versions=_uboot_get_versions,
     ),
     "uclibc-ng": ProjectConfig(
         remotes=["https://cgit.uclibc-ng.org/cgi/cgit/uclibc-ng.git"],
+        get_versions=_musl_uclibc_get_versions,
     ),
     "vpp": ProjectConfig(
         remotes=["https://gerrit.fd.io/r/vpp"],
+        get_versions=_vpp_get_versions,
     ),
     "xen": ProjectConfig(
         remotes=["https://xenbits.xen.org/git-http/xen.git"],
+        get_versions=_xen_get_versions,
     ),
     "zephyr": ProjectConfig(
         remotes=["https://github.com/zephyrproject-rtos/zephyr"],
         dts_comp_support=True,
+        get_versions=_zephyr_get_versions,
     ),
 }
-
-PROJECTS["amazon-freertos"].get_versions = _amazon_freertos_get_versions
-PROJECTS["arm-trusted-firmware"].get_versions = _arm_trusted_firmware_get_versions
-PROJECTS["barebox"].get_versions = _barebox_get_versions
-PROJECTS["bluez"].get_versions = _bluez_get_versions
-PROJECTS["busybox"].get_versions = _busybox_get_versions
-PROJECTS["coreboot"].get_versions = _coreboot_get_versions
-PROJECTS["dpdk"].get_versions = _dpdk_get_versions
-PROJECTS["freebsd"].get_versions = _freebsd_get_versions
-PROJECTS["glibc"].get_versions = _glibc_get_versions
-PROJECTS["grub"].get_versions = _grub_get_versions
-PROJECTS["igt"].get_versions = _igt_get_versions
-
-
-def _iproute2_get_versions(repo_dir):
-    p = re.compile(r"^v\d+\.\d+")
-    return [(tag, tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)]
-
-
-PROJECTS["iproute2"].get_versions = _iproute2_get_versions
-PROJECTS["linux"].get_versions = _linux_get_versions
-PROJECTS["llvm"].get_versions = _llvm_get_versions
-PROJECTS["mesa"].get_versions = _mesa_get_versions
-PROJECTS["musl"].get_versions = _musl_uclibc_get_versions
-PROJECTS["ofono"].get_versions = _ofono_get_versions
-PROJECTS["op-tee"].get_versions = _optee_get_versions
-PROJECTS["opensbi"].get_versions = _default_get_versions
-PROJECTS["qemu"].get_versions = _qemu_get_versions
-PROJECTS["toybox"].get_versions = _toybox_get_versions
-PROJECTS["u-boot"].get_versions = _uboot_get_versions
-PROJECTS["uclibc-ng"].get_versions = _musl_uclibc_get_versions
-PROJECTS["vpp"].get_versions = _vpp_get_versions
-PROJECTS["xen"].get_versions = _xen_get_versions
-PROJECTS["zephyr"].get_versions = _zephyr_get_versions
