@@ -22,17 +22,6 @@ def _get_tags_sorted(repo_dir: str) -> list[str]:
     return [tag for tag in out.stdout.splitlines() if tag]
 
 
-def _default_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
-    return [(tag, tag, False) for tag in _get_tags_sorted(repo_dir)]
-
-
-def _tag_pattern_versions(repo_dir: str, pattern: str) -> list[tuple[str, str, bool]]:
-    regex = re.compile(pattern)
-    return [
-        (tag, tag, False) for tag in _get_tags_sorted(repo_dir) if regex.search(tag)
-    ]
-
-
 def _fail_on_unexpected_tags(project, tags):
     raise ValueError(f"{project}: unexpected tags: {tags}")
 
@@ -280,8 +269,12 @@ def _vpp_get_versions(repo_dir: str) -> list[tuple[str, str, bool]]:
 def _amazon_freertos_get_versions(repo_dir):
     p_ym = re.compile(r"^(\d{4})(\d{2})\.(\d+)$")
     p_v = re.compile(r"^v\d+\.\d+\.\d+$")
+    skip_set = {"201906.00_Major", "20210526_Archive"}
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
+        if tag in skip_set:
+            continue
         m = p_ym.match(tag)
         if m:
             result.append(
@@ -290,17 +283,21 @@ def _amazon_freertos_get_versions(repo_dir):
             continue
         if p_v.match(tag):
             result.append((tag, tag, False))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("amazon-freertos", unexpected)
     return result
 
 
 def _arm_trusted_firmware_get_versions(repo_dir):
     p_v = re.compile(r"^v\d+\.\d+")
     p_for = re.compile(r"^for-v0\.4(.*)$")
+    skip_prefixes = ("sandbox/", "lts-", "arm_cca_")
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
-        if tag.startswith("sandbox/"):
-            continue
-        if tag.startswith("lts-v"):
+        if tag.startswith(skip_prefixes):
             continue
         m = p_for.match(tag)
         if m:
@@ -309,122 +306,259 @@ def _arm_trusted_firmware_get_versions(repo_dir):
             continue
         if p_v.match(tag):
             result.append((tag, tag, "-rc" in tag))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("arm-trusted-firmware", unexpected)
     return result
 
 
 def _bluez_get_versions(repo_dir):
     p = re.compile(r"^\d+\.\d+$")
-    return [
-        (tag, "v" + tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)
-    ]
+    skip_prefixes = ("libs-", "utils-")
+    result = []
+    unexpected = []
+    for tag in _get_tags_sorted(repo_dir):
+        if tag.startswith(skip_prefixes):
+            continue
+        if p.match(tag):
+            result.append((tag, "v" + tag, False))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("bluez", unexpected)
+    return result
 
 
 def _busybox_get_versions(repo_dir):
     p = re.compile(r"^\d+_\d+(_\d+)?$")
-    return [
-        (tag, "v" + tag.replace("_", "."), False)
-        for tag in _get_tags_sorted(repo_dir)
-        if p.match(tag)
-    ]
+    skip_re = re.compile(r"^(0_29alpha|0_43pre|1_00_(pre|rc))\d+$")
+    result = []
+    unexpected = []
+    for tag in _get_tags_sorted(repo_dir):
+        if skip_re.match(tag):
+            continue
+        if p.match(tag):
+            result.append((tag, "v" + tag.replace("_", "."), False))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("busybox", unexpected)
+    return result
 
 
 def _coreboot_get_versions(repo_dir):
     p = re.compile(r"^\d+\.\d+(\.\d+)?$")
-    return [
-        (tag, "v" + tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)
-    ]
+    result = []
+    unexpected = []
+    for tag in _get_tags_sorted(repo_dir):
+        if p.match(tag):
+            result.append((tag, "v" + tag, False))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("coreboot", unexpected)
+    return result
 
 
 def _dpdk_get_versions(repo_dir):
     p = re.compile(r"^v\d+\.\d+")
+    skip_set = {"23.11.5-rc1"}
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
+        if tag in skip_set:
+            continue
         if p.match(tag):
             result.append((tag, tag, "-rc" in tag))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("dpdk", unexpected)
     return result
 
 
 def _freebsd_get_versions(repo_dir):
     p = re.compile(r"^release/(\d+\.\d+\.\d+)$")
+    skip_prefixes = (
+        "upstream/",
+        "vendor/",
+        "vendors/",
+        "verndor/",
+        "llvmorg-",
+        "bc/",
+        "zfs-",
+    )
+    skip_re = re.compile(r"^release/(.*_cvs|.*-p\d+|\d+\.\d+\.\d+\.\d+|\d+\.\d+)$")
+    skip_set = {"2023.08.19-b34f66deb02e188104"}
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
+        if tag.startswith(skip_prefixes) or skip_re.match(tag) or tag in skip_set:
+            continue
         m = p.match(tag)
         if m:
             result.append((tag, "v" + m.group(1), False))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("freebsd", unexpected)
     return result
 
 
 def _grub_get_versions(repo_dir):
     p = re.compile(r"^(grub-)?(\d+\.\d+.*)$")
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
         m = p.match(tag)
         if m:
             result.append((tag, "v" + m.group(2), "-rc" in tag))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("grub", unexpected)
     return result
 
 
 def _linux_get_versions(repo_dir):
     p = re.compile(r"^v\d+\.\d+")
+    skip_prefixes = ("pre", "lia64-")
+    skip_re = re.compile(r"^\d")
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
+        if tag.startswith(skip_prefixes) or skip_re.match(tag):
+            continue
         if p.match(tag):
             result.append((tag, tag, "-rc" in tag))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("linux", unexpected)
     return result
 
 
 def _ofono_get_versions(repo_dir):
     p = re.compile(r"^\d+\.\d+$")
-    return [
-        (tag, "v" + tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)
-    ]
+    result = []
+    unexpected = []
+    for tag in _get_tags_sorted(repo_dir):
+        if p.match(tag):
+            result.append((tag, "v" + tag, False))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("ofono", unexpected)
+    return result
 
 
 def _qemu_get_versions(repo_dir):
     p_v = re.compile(r"^v\d+\.\d+")
     p_rel = re.compile(r"^release_(\d+(?:_\d+)+)$")
+    skip_set = {"initial"}
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
+        if tag in skip_set:
+            continue
         if p_v.match(tag):
             result.append((tag, tag, "-rc" in tag))
             continue
         m = p_rel.match(tag)
         if m:
             result.append((tag, "v" + m.group(1).replace("_", "."), False))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("qemu", unexpected)
     return result
 
 
 def _toybox_get_versions(repo_dir):
     p = re.compile(r"^\d+\.\d+(\.\d+)?$")
-    return [
-        (tag, "v" + tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)
-    ]
+    skip_set = {"0.0.9.1", "0.0.9.2"}
+    result = []
+    unexpected = []
+    for tag in _get_tags_sorted(repo_dir):
+        if tag in skip_set:
+            continue
+        if p.match(tag):
+            result.append((tag, "v" + tag, False))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("toybox", unexpected)
+    return result
 
 
 def _xen_get_versions(repo_dir):
     p = re.compile(r"^RELEASE-(\d+\.\d+.*)$")
+    skip_prefixes = ("xen-", "split-", "latest-")
+    skip_re = re.compile(r"^\d+\.")
+    skip_set = {"beta1", "ia64-stable", "semistable", "sparse-tree-deprecated"}
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
+        if tag.startswith(skip_prefixes) or skip_re.match(tag) or tag in skip_set:
+            continue
         m = p.match(tag)
         if m:
             result.append((tag, "v" + m.group(1), False))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("xen", unexpected)
     return result
 
 
 def _zephyr_get_versions(repo_dir):
     p = re.compile(r"^v\d+\.\d+")
+    skip_prefixes = ("zephyr-v",)
     result = []
+    unexpected = []
     for tag in _get_tags_sorted(repo_dir):
-        if tag.startswith("zephyr-v"):
+        if tag.startswith(skip_prefixes):
             continue
         if p.match(tag):
             result.append((tag, tag, "-rc" in tag))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("zephyr", unexpected)
     return result
 
 
 def _iproute2_get_versions(repo_dir):
     p = re.compile(r"^v\d+\.\d+")
-    return [(tag, tag, False) for tag in _get_tags_sorted(repo_dir) if p.match(tag)]
+    skip_prefixes = ("ss-", "v2_6_")
+    skip_set = {"ss050607"}
+    result = []
+    unexpected = []
+    for tag in _get_tags_sorted(repo_dir):
+        if tag.startswith(skip_prefixes) or tag in skip_set:
+            continue
+        if p.match(tag):
+            result.append((tag, tag, False))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("iproute2", unexpected)
+    return result
+
+
+def _opensbi_get_versions(repo_dir):
+    pattern = re.compile(r"^v\d+\.\d+(\.\d+)?$")
+    result = []
+    unexpected = []
+    for tag in _get_tags_sorted(repo_dir):
+        if pattern.match(tag):
+            result.append((tag, tag, False))
+            continue
+        unexpected.append(tag)
+    if unexpected:
+        _fail_on_unexpected_tags("opensbi", unexpected)
+    return result
 
 
 PROJECTS: dict[str, ProjectConfig] = {
@@ -512,7 +646,7 @@ PROJECTS: dict[str, ProjectConfig] = {
     ),
     "opensbi": ProjectConfig(
         remotes=["https://github.com/riscv-software-src/opensbi"],
-        get_versions=_default_get_versions,
+        get_versions=_opensbi_get_versions,
     ),
     "qemu": ProjectConfig(
         remotes=["https://gitlab.com/qemu-project/qemu.git"],
