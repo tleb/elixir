@@ -19,6 +19,7 @@
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
 import sys
+import re
 import logging
 import subprocess, os
 
@@ -45,6 +46,16 @@ def scriptLines(*args, env=None):
     p = p.split(b'\n')
     del p[-1]
     return p
+
+tokenize_regex_D = re.compile(rb'''((/\*.*?\*/|//.*?\001|[^']"(\\.|.)*?"|# *include *<.*?>|[^\w-])+)([\w-]+)?''')
+tokenize_regex = re.compile(rb'''((/\*.*?\*/|//.*?\001|[^']"(\\.|.)*?"|# *include *<.*?>|\W)+)(\w+)?''')
+
+def tokenizeFile(ver, file, family, env=None):
+    data = script('get-file', ver, file, env=env).replace(b'\n', b'\001')
+    r = tokenize_regex_D if family == 'D' else tokenize_regex
+    for k in r.findall(data):
+        yield k[0]
+        yield k[3]
 
 def unescape(bstr):
     subs = (
