@@ -41,10 +41,11 @@
 # lexing or subprocess calls.
 
 import os
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from sys import argv
-from threading import Lock
+from threading import Lock, local
 
 from elixir.lexers import TokenType
 import elixir.lib as lib
@@ -81,11 +82,45 @@ comps_lock = Lock() # db.comps
 comps_docs_lock = Lock() # db.comps_docs
 
 
+_batch_tls = local()
+
+def get_blob_batch(hash):
+    '''Blob content from a persistent per-thread `git cat-file --batch`.
+
+    Same bytes as script('get-blob', hash) without one fork+exec of
+    script.sh and git per blob. Responses arrive in request order; one
+    process per thread needs no locking.
+    '''
+    p = getattr(_batch_tls, 'batch', None)
+    if p is None or p.poll() is not None:
+        p = subprocess.Popen(['git', 'cat-file', '--batch'],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             cwd=lib.getRepoDir())
+        _batch_tls.batch = p
+
+    p.stdin.write(hash + b'\n')
+    p.stdin.flush()
+
+    header = p.stdout.readline().split()
+    assert header[1] == b'blob', header
+    size = int(header[2])
+    data = p.stdout.read(size)
+    p.stdout.read(1) # newline after the payload
+    return data
+
+
+executor = None # Created on first use; its threads live for the whole run
+
 def parallel(fn, items):
     '''Run fn on every item with the thread pool, surfacing failures.'''
+    global executor
     if not items: return
-    with ThreadPoolExecutor(max_workers=num_threads) as pool:
-        list(pool.map(fn, items))
+    # One executor for the whole run. Threads cache per-thread state
+    # (the cat-file --batch pipes below) that a phase-scoped executor
+    # would leak: its threads die with it and the pipes stay open.
+    if executor is None:
+        executor = ThreadPoolExecutor(max_workers=num_threads)
+    list(executor.map(fn, items))
 
 
 def chunks(idxs):
@@ -209,9 +244,9 @@ def update_references(idxs):
             continue
 
         try:
-            code = script('get-blob', hash).decode()
+            code = get_blob_batch(hash).decode()
         except UnicodeDecodeError:
-            code = script('get-blob', hash).decode('raw_unicode_escape')
+            code = get_blob_batch(hash).decode('raw_unicode_escape')
 
         prefix = b''
         # Kconfig values are saved as CONFIG_<value>
