@@ -50,12 +50,20 @@ def scriptLines(*args, env=None):
 tokenize_regex_D = re.compile(rb'''((/\*.*?\*/|//.*?\001|[^']"(\\.|.)*?"|# *include *<.*?>|[^\w-])+)([\w-]+)?''')
 tokenize_regex = re.compile(rb'''((/\*.*?\*/|//.*?\001|[^']"(\\.|.)*?"|# *include *<.*?>|\W)+)(\w+)?''')
 
+def tokenize(data, family):
+    r = tokenize_regex_D if family == 'D' else tokenize_regex
+    pos = 0
+    for m in r.finditer(data):
+        # Text not covered by a match is only possible at the start of the
+        # data, where no separator precedes the first word run. The perl
+        # version passed it through verbatim, glued to the first separator.
+        yield data[pos:m.start()] + m.group(1)
+        yield m.group(4) or b''
+        pos = m.end()
+
 def tokenizeFile(ver, file, family, env=None):
     data = script('get-file', ver, file, env=env).replace(b'\n', b'\001')
-    r = tokenize_regex_D if family == 'D' else tokenize_regex
-    for k in r.findall(data):
-        yield k[0]
-        yield k[3]
+    yield from tokenize(data, family)
 
 def unescape(bstr):
     subs = (
