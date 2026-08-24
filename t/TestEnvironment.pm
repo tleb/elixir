@@ -103,6 +103,9 @@ has query_py => (
 has update_py => (
     default => sub { find_program('update.py') }
 );
+has utils_index => (
+    default => sub { find_program('utils', 'index') }
+);
 has web_py => (
     default => sub { find_program('t', 'web_cgi.py') }
 );
@@ -191,8 +194,14 @@ sub build_db {
     local $ENV{LXR_REPO_DIR} = $self->lxr_repo_dir;
     local $ENV{LXR_DATA_DIR} = $db_dir;
 
-    run_program($self->update_py)
-        or die "Could not create database from $ENV{LXR_REPO_DIR} in $ENV{LXR_DATA_DIR}";
+    # utils/index runs update.py, which indexes the new tags one at a
+    # time. The test repository has no remotes, so the fetch steps are
+    # no-ops and no network is involved.
+    my ($exit_status, $lrStdout, $lrStderr) =
+        run_program($self->utils_index, $self->lxr_proj_dir, PROJECT);
+    diag join "\n", @$lrStdout;
+    die "Could not create database from $ENV{LXR_REPO_DIR} in $ENV{LXR_DATA_DIR}"
+        if $exit_status != 0;
 
     return $self;
 } #build_db()

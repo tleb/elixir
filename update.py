@@ -602,37 +602,55 @@ if not num_tags:
         generate_defs_caches()
     exit(0)
 
-threads_list.append(UpdateIds(tag_buf))
-threads_list.append(UpdateVersions(tag_buf))
+# Index one tag at a time, the oldest first (script.sh list-tags order):
+# references are only recorded for identifiers already in db.defs, so
+# indexing several tags at once drops references depending on thread
+# timing. Indexing each tag fully before starting the next keeps the
+# result deterministic, and db.vers records progress after every tag, so
+# an interrupted run resumes where it stopped.
+for tag in tag_buf:
+    # Reset the state the threads share, so each tag starts clean
+    new_idxes.clear()
+    bindings_idxes.clear()
+    defs_idxes.clear()
+    file_paths.clear()
+    tags_done = False
+    threads_list.clear()
+    for counters in (tags_defs, tags_refs, tags_docs, tags_comps,
+                     tags_comps_docs):
+        counters[0] = counters[1] = 0
 
-# Define defs threads
-for i in range(num_th_defs):
-    threads_list.append(UpdateDefs(i, num_th_defs))
-# Define refs threads
-for i in range(num_th_refs):
-    threads_list.append(UpdateRefs(i, num_th_refs))
-# Define docs threads
-for i in range(num_th_docs):
-    threads_list.append(UpdateDocs(i, num_th_docs))
-# Define comps threads
-for i in range(num_th_comps):
-    threads_list.append(UpdateComps(i, num_th_comps))
-# Define comps_docs threads
-for i in range(num_th_comps_docs):
-    threads_list.append(UpdateCompsDocs(i, num_th_comps_docs))
+    threads_list.append(UpdateIds([tag]))
+    threads_list.append(UpdateVersions([tag]))
+
+    # Define defs threads
+    for i in range(num_th_defs):
+        threads_list.append(UpdateDefs(i, num_th_defs))
+    # Define refs threads
+    for i in range(num_th_refs):
+        threads_list.append(UpdateRefs(i, num_th_refs))
+    # Define docs threads
+    for i in range(num_th_docs):
+        threads_list.append(UpdateDocs(i, num_th_docs))
+    # Define comps threads
+    for i in range(num_th_comps):
+        threads_list.append(UpdateComps(i, num_th_comps))
+    # Define comps_docs threads
+    for i in range(num_th_comps_docs):
+        threads_list.append(UpdateCompsDocs(i, num_th_comps_docs))
 
 
-# Start to process tags
-threads_list[0].start()
+    # Start to process tags
+    threads_list[0].start()
 
-# Wait until the first tag is ready
-with tag_ready:
-    tag_ready.wait()
+    # Wait until the first tag is ready
+    with tag_ready:
+        tag_ready.wait()
 
-# Start remaining threads
-for i in range(1, len(threads_list)):
-    threads_list[i].start()
+    # Start remaining threads
+    for i in range(1, len(threads_list)):
+        threads_list[i].start()
 
-# Make sure all threads finished
-for i in range(len(threads_list)):
-    threads_list[i].join()
+    # Make sure all threads finished
+    for i in range(len(threads_list)):
+        threads_list[i].join()

@@ -111,8 +111,11 @@ Run it again at any time to index newly released versions.
 You can set `$ELIXIR_THREADS` if you want to change the number of threads used by
 update.py for indexing (by default the number of CPUs on your system).
 
+`update.py` indexes the new tags one at a time, the oldest first, and
+`utils/index` runs it after each fetch.
+
 ____
-Generating the full database can take a long time: it takes about 15 hours on a Xeon E3-1245 v5 to index 1800 tags in the Linux kernel. For that reason, you may want to tweak the script (for example, by limiting the number of tags with a "head") in order to test the update and query commands. You can even create a new Git repository and just create one tag instead of using the official kernel repository which is very large.
+Generating the full database can take a long time: it takes about 15 hours on a Xeon E3-1245 v5 to index 1800 tags in the Linux kernel. Progress is recorded after each tag, so you can interrupt indexing and run it again later to continue where it stopped. You can even create a new Git repository and just create one tag instead of using the official kernel repository which is very large.
 ____
 
 After indexing is done, Elixir should be available under the following URL on your host:
