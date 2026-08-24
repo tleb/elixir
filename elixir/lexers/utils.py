@@ -75,34 +75,14 @@ class FirstInLine(Matcher):
 
     def __init__(self, regex):
         self.rule = re.compile(regex, flags=re.MULTILINE)
-        self.first_in_line = True
 
-    def update_after_match(self, code, pos, line, token):
-        # first token is always first in line
-        if pos == 0:
-            self.first_in_line = True
-            return
-
-        # check if matched token contains a newline
-        newline_pos = code.rfind('\n', token.span[0], token.span[1])
-
-        # if it doesn't contain a newline, check the part after newline
-        if newline_pos != -1:
-            post_newline_tok = code[newline_pos+1:token.span[1]]
-
-            # if part after newline contains only whitespace (or nothing), the next token is first in line
-            if self.whitespace.fullmatch(post_newline_tok):
-                self.first_in_line = True
-        # if currently matched is the first in line, and only contains whitespace,
-        # the next token also counts as first in line
-        elif self.first_in_line and self.whitespace.fullmatch(code, token.span[0], token.span[1]):
-            self.first_in_line = True
-        # otherwise reset first in line marker
-        else:
-            self.first_in_line = False
-
-    def match(self, code, pos, line):
-        if self.first_in_line:
+    def match(self, code: str, pos: int, line: int) -> None | re.Match:
+        # Only whitespace between the last newline (or the start of the
+        # file) and pos means the token matched at pos is first in its
+        # line. Deriving this from the code itself keeps the matcher
+        # stateless: lexer rules are shared between threads and files.
+        newline_pos = code.rfind('\n', 0, pos)
+        if self.whitespace.fullmatch(code, newline_pos + 1, pos):
             return self.rule.match(code, pos)
 
 class LexerContext:
