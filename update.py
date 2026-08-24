@@ -67,10 +67,11 @@ chunk_size = 256 # Max blobs per work unit; chunks() caps it further
 
 num_threads = os.cpu_count() or 1
 
-# Shared state, written in one phase, read in later phases:
+# Cross-phase state, written in one phase, read in later phases:
 file_paths = {} # idx -> path (vers -> refs, comps_docs)
 bindings_idxes = [] # DT bindings documentation files (vers -> comps_docs)
 defs_idxes = {} # (idx*idx_key_mod + line) -> ident (defs -> refs)
+defs_keys = set() # idents known to db.defs, snapshotted before the refs phase
 
 # Guards for read-modify-write cycles on database keys:
 defs_lock = Lock() # db.defs
@@ -229,9 +230,9 @@ def update_references(idxs):
                 continue
 
             # All definitions are indexed at this point (refs phase runs
-            # last), so this cannot drop references to identifiers defined
-            # in another tag of the same run.
-            ref_allowed = db.defs.exists(token)
+            # after the defs phase joined), so the gate reads a snapshot of
+            # the keys taken once instead of one berkeleydb lookup per token.
+            ref_allowed = token in defs_keys
 
             # We only index CONFIG_??? in makefiles
             config_or_not_makefile = family != 'M' or token.startswith(b'CONFIG_')
@@ -395,6 +396,8 @@ def index_tag(tag):
         parallel(update_compatibles, work)
 
     # Phase 4: references (needs all definitions)
+    global defs_keys # the worker threads read the module-level snapshot
+    defs_keys = set(db.defs.get_keys())
     parallel(update_references, work)
 
     # Phase 5: compatibles from bindings documentation (needs all comps)
