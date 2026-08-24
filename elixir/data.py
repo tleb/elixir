@@ -148,6 +148,10 @@ class BsdDB:
     def __init__(self, filename, readonly, contentType, shared=False):
         self.filename = filename
         self.db = berkeleydb.db.DB()
+        # Skip the shared-memory default cache; a per-handle cache matters
+        # once the databases stop fitting the OS page cache. Measured -11%
+        # indexing Linux v6.12.6 with a larger cache in the #372 benchmarks.
+        self.db.set_cachesize(0, 256 * 1024 * 1024)
         flags = berkeleydb.db.DB_THREAD if shared else 0
 
         if readonly:
