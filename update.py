@@ -35,11 +35,14 @@
 # Phases are sequential: a phase starts only after the previous one
 # finished, so data written by one phase is visible to the next without
 # locking. Inside a phase, work units (chunks of blobs) run in a thread
-# pool. The databases are opened with DB_THREAD, so plain concurrent
+# pool; refs lexes in a process pool instead (pure Python, GIL-bound),
+# forked once at startup while the parent is still small, because fork
+# cost grows with the parent's page tables as the caches fill. The databases are opened with DB_THREAD, so plain concurrent
 # accesses are safe; only read-modify-write cycles on a key are not, and
 # each has a dedicated lock, held around the cycle only, never around
 # lexing or subprocess calls.
 
+import multiprocessing
 import os
 import subprocess
 import sys
@@ -229,13 +232,16 @@ def update_definitions(idxs):
                 db.defs.put(ident, obj)
 
 
-def update_references(idxs):
-    for idx in idxs:
-        if idx % 1000 == 0: progress('refs: ' + str(idx))
+def _refs_lex_chunk(triples):
+    '''Lex a chunk of (idx, path, hash); return [(idx, family, idents)].
 
-        hash = db.hash.get(idx)
-        filename = file_paths[idx].decode()
-
+    idents maps every identifier token of the blob to the list of its
+    line numbers. Workers carry no per-tag state, so the pool can be
+    forked once at startup and live across tags; gating on definitions
+    happens in the parent, which owns the defs state.
+    '''
+    out = []
+    for idx, filename, hash in triples:
         family = lib.getFileFamily(filename)
         if family == None: continue
 
@@ -264,23 +270,47 @@ def update_references(idxs):
             if token_type != TokenType.IDENTIFIER:
                 continue
 
-            # All definitions are indexed at this point (refs phase runs
-            # after the defs phase joined), so the gate reads a snapshot of
-            # the keys taken once instead of one berkeleydb lookup per token.
-            ref_allowed = token in defs_keys
-
             # We only index CONFIG_??? in makefiles
             config_or_not_makefile = family != 'M' or token.startswith(b'CONFIG_')
-            i = idx*idx_key_mod + line
-
-            if ref_allowed and defs_idxes.get(i) != token and config_or_not_makefile:
+            if config_or_not_makefile:
                 if token in idents:
-                    idents[token] += ',' + str(line)
+                    idents[token].append(line)
                 else:
-                    idents[token] = str(line)
+                    idents[token] = [line]
 
-        with refs_lock:
+        out.append((idx, family, idents))
+    return out
+
+
+def update_references(triple_chunks):
+    '''Lex references in the pool forked at startup; gate on definitions
+    and write db.refs from this thread.
+
+    Lexing is pure Python and GIL-bound, so it runs in process workers.
+    Forking a fresh pool per tag measured at 88.8% of the refs phase:
+    the parent's page tables grow with the database caches. The pool is
+    therefore created once, before any phase runs. Workers forked that
+    early cannot inherit the defs state, so they return every
+    identifier token and this thread applies the gate, which the
+    sequential phases keep consistent. Results arrive in chunk order,
+    so the writes are deterministic and single-threaded (no refs_lock
+    needed).
+    '''
+    global defs_keys
+    defs_keys = set(db.defs.get_keys())
+    done = 0
+    for chunk in refs_pool.imap(_refs_lex_chunk, triple_chunks):
+        for idx, family, idents in chunk:
             for ident, lines in idents.items():
+                if ident not in defs_keys:
+                    continue
+
+                lines = [line for line in lines
+                         if defs_idxes.get(idx*idx_key_mod + line) != ident]
+                if not lines:
+                    continue
+                lines = ','.join(str(line) for line in lines)
+
                 if db.refs.exists(ident):
                     obj = db.refs.get(ident)
                 else:
@@ -290,6 +320,8 @@ def update_references(idxs):
                 if verbose:
                     print(f"ref: {ident} in #{idx} @ {lines}")
                 db.refs.put(ident, obj)
+            done += 1
+            if done % 10 == 0: progress('refs: chunk %d/%d' % (done, len(triple_chunks)))
 
 
 def update_doc_comments(idxs):
@@ -408,6 +440,11 @@ if not num_tags:
         generate_defs_caches()
     exit(0)
 
+# Fork the refs pool before any phase runs: the parent only grows from
+# here (database caches fill up) and fork cost follows its page tables.
+# The workers are stateless, so an early fork loses nothing.
+refs_pool = multiprocessing.get_context('fork').Pool(num_threads)
+
 def index_tag(tag):
     '''Index one tag: every phase runs for it before the next tag
     starts, so db.vers records progress tag by tag.'''
@@ -431,9 +468,12 @@ def index_tag(tag):
         parallel(update_compatibles, work)
 
     # Phase 4: references (needs all definitions)
-    global defs_keys # the worker threads read the module-level snapshot
-    defs_keys = set(db.defs.get_keys())
-    parallel(update_references, work)
+    # The refs pool was forked at startup, before this tag's maps
+    # existed; the gate runs in the parent. Each worker process owns
+    # its own persistent cat-file --batch pipe.
+    triple_chunks = [[(idx, file_paths[idx].decode(), db.hash.get(idx)) for idx in chunk]
+                     for chunk in work]
+    update_references(triple_chunks)
 
     # Phase 5: compatibles from bindings documentation (needs all comps)
     if dts_comp_support:
@@ -443,5 +483,8 @@ def index_tag(tag):
 
 for tag in tag_buf:
     index_tag(tag)
+
+refs_pool.terminate()
+refs_pool.join()
 
 generate_defs_caches()
