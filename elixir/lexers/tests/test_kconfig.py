@@ -251,8 +251,8 @@ config TEST
         ['PUNCTUATION', ')'],
     ], self.default_filtered_tokens + ("PUNCTUATION",))
 
-def test_macros2(self):
-    self.lex(r"""
+    def test_macros2(self):
+        self.lex(r"""
 config TEST
     depends on $(error-if,a != b,warning to print)
     depends on $(filename)
@@ -287,7 +287,7 @@ config TEST
         ['PUNCTUATION', '('],
         ['SPECIAL', 'lineno'],
         ['PUNCTUATION', ')'],
-    ], self.default_filtered_tokens + ("PUNCTUATION",))
+        ], self.default_filtered_tokens + ("PUNCTUATION",))
 
     def test_help(self):
         self.lex(r"""
