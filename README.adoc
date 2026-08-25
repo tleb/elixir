@@ -22,13 +22,14 @@ toc::[]
 
 = Requirements
 
-* Python >= 3.8
-* Git >= 1.9
-* The Jinja2 and Pygments (>= 2.7) Python libraries
-* Berkeley DB (and its Python binding)
-* Universal Ctags
-* Perl (for non-greedy regexes and automated testing)
-* Falcon and `mod_wsgi` (for the REST API)
+* Git (to clone this repository)
+* Docker (or a compatible container runtime)
+
+All other dependencies (Python 3 and its libraries, Berkeley DB,
+Universal Ctags, Apache) are bundled in the Docker image.
+
+Running the test suite on a host has additional requirements, see the
+_Automated testing_ section.
 
 = Architecture
 
@@ -43,185 +44,121 @@ queries, respectively.
 When installing the system, you should test each layer manually and make
 sure it works correctly before moving on to the next one.
 
-= Manual Installation
+= Installation and deployment (Docker)
 
-== Install Dependencies
+The container image is used for both serving the web pages and indexing:
+the `index` command, available inside the container, clones (or updates)
+the git repositories and builds the databases.
 
-____
-For Debian
-____
+== Data directory layout
 
-----
-sudo apt install python3-pip python3-venv libdb-dev python3-dev build-essential universal-ctags perl git apache2 libapache2-mod-wsgi-py3 libjansson4
-----
-
-== Download Elixir Project
+Elixir keeps all its data (git repositories and databases) under a single
+root directory. In the container this is `/srv/elixir-data`, with one
+sub-directory per project:
 
 ----
-git clone https://github.com/bootlin/elixir.git /usr/local/elixir/
+/srv/elixir-data/
+  <project 1>/
+    data/
+    repo/
+  <project 2>/
+    data/
+    repo/
 ----
 
-== Create a virtualenv for Elixir
+`data` holds the cross-reference databases and `repo` the bare git
+repository of the project. The `index` command creates and fills these
+directories, so you normally never manipulate them yourself.
 
-----
-python -m venv /usr/local/elixir/venv
-. /usr/local/elixir/venv/bin/activate
-pip install -r /usr/local/elixir/requirements.txt
-----
+== Build the Docker image
 
-== Create directories for project data
+Dockerfiles are provided in the `docker/` directory.
+To build the image, run the following commands:
 
-----
-mkdir -p /path/elixir-data/linux/repo
-mkdir -p /path/elixir-data/linux/data
-----
+ # git clone https://github.com/bootlin/elixir.git ./elixir
+ # docker build -t elixir --build-arg ELIXIR_VERSION=`git rev-parse --short HEAD` -f ./elixir/docker/Dockerfile ./elixir
 
-== Set environment variables
+The ELIXIR_VERSION build argument is optional. Since .git directory is not copied into Docker image by default,
+the option is used to pass a version string to Elixir.
 
-Two environment variables are used to tell Elixir where to find the project's
-local git repository and its databases:
+== Run the container
 
-* `LXR_REPO_DIR` (the git repository directory for your project)
-* `LXR_DATA_DIR` (the database directory for your project)
+ # mkdir ./elixir-data
+ # docker run -v ./elixir-data/:/srv/elixir-data -d --name elixir-container -p 80:80 elixir
 
-Now open `/etc/profile` and append the following content.
+This starts Apache inside the container and serves Elixir on port 80
+of the host.
 
-----
-export LXR_REPO_DIR=/path/elixir-data/linux/repo
-export LXR_DATA_DIR=/path/elixir-data/linux/data
-----
+== Index a project
 
-And then run `source /etc/profile`.
+The Docker image does not contain any repositories.
+To index a repository, you can use the `index` script.
+For example, to add the https://musl.libc.org/[musl] repository, run:
 
-== Clone Kernel source code
+ # docker exec -it elixir-container index /srv/elixir-data musl
 
-First clone the master tree released by Linus Torvalds:
+Or, to run indexing in a separate container:
 
-----
-cd /path/elixir-data/linux
-git clone --bare https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git repo
-----
+ # docker run -v ./elixir-data/:/srv/elixir-data \
+    --entrypoint index elixir /srv/elixir-data musl
 
-Then, you should also declare a `stable` remote branch corresponding to the `stable` tree, to get all release updates:
+You can also use `index /srv/elixir-data --all` to start indexing all officially supported repositories.
 
-----
-cd repo
-git remote add stable git://git.kernel.org/pub/scm/linux/kernel/git/stable/linux-stable.git
-git fetch stable
-----
+The `index` command fetches the project's remotes (creating the bare
+repository on first run) and then runs `update.py` to build the databases.
+Run it again at any time to index newly released versions.
 
-Then, you can also declare an `history` remote branch corresponding to the old Linux versions not present in the other repos, to get all the old version still available:
-
-----
-cd repo
-git remote add history https://github.com/bootlin/linux-history.git
-git fetch history --tags
-----
-
-Feel free to add more remote branches in this way, as Elixir will consider tags from all remote branches.
-
-== First Test
-
-----
-cd /usr/local/elixir/
-./script.sh list-tags
-----
-
-== Create Database
-
-----
-. ./venv/bin/activate
-./update.py <number of threads>
-----
+You can set `$ELIXIR_THREADS` if you want to change the number of threads used by
+update.py for indexing (by default the number of CPUs on your system).
 
 ____
 Generating the full database can take a long time: it takes about 15 hours on a Xeon E3-1245 v5 to index 1800 tags in the Linux kernel. For that reason, you may want to tweak the script (for example, by limiting the number of tags with a "head") in order to test the update and query commands. You can even create a new Git repository and just create one tag instead of using the official kernel repository which is very large.
 ____
 
-== Second Test
+After indexing is done, Elixir should be available under the following URL on your host:
+http://localhost/musl/latest/source
 
-Verify that the queries work:
+== Verifying the installation
 
- $ python3 -m utils.query ident v4.10 raw_spin_unlock_irq C
- $ python3 -m utils.query file v4.10 /kernel/sched/clock.c
+The individual layers can be checked from inside the container.
+`script.sh` and `utils.query` need to know which project to work on,
+through the `LXR_REPO_DIR` and `LXR_DATA_DIR` environment variables:
 
-NOTE: `v4.10` can be replaced with any other tag.
-NOTE: Don't forget to activate the virtual environment!
+ # docker exec \
+    -e LXR_REPO_DIR=/srv/elixir-data/musl/repo \
+    -e LXR_DATA_DIR=/srv/elixir-data/musl/data \
+    elixir-container ./script.sh list-tags
 
-== Configure httpd
+ # docker exec \
+    -e LXR_REPO_DIR=/srv/elixir-data/musl/repo \
+    -e LXR_DATA_DIR=/srv/elixir-data/musl/data \
+    elixir-container python3 -m utils.query ident latest malloc C
 
-The CGI interface (`web.py`) is meant to be called from your web
-server. Since it includes support for indexing multiple projects,
-it expects a different variable (`LXR_PROJ_DIR`) which points to a
-directory with a specific structure:
+NOTE: `latest` can be replaced with any other tag, and `malloc` with any
+other identifier.
 
-* `<LXR_PROJ_DIR>`
- ** `<project 1>`
-  *** `data`
-  *** `repo`
- ** `<project 2>`
-  *** `data`
-  *** `repo`
- ** `<project 3>`
-  *** `data`
-  *** `repo`
+Finally, check the web pages and the REST API (see below) served by
+the container.
 
-It will then generate the other two variables upon calling the query
-command.
+== Automatic repository updates
 
-Now replace `/etc/apache2/sites-enabled/000-default.conf` with `docker/000-default.conf`.
-Note: If using httpd (RedHat/Centos) instead of apache2 (Ubuntu/Debian),
-the default config file to edit is `/etc/httpd/conf.d/elixir.conf`.
+The Docker image does not automatically update repositories by itself.
+You can, for example, start `index /srv/elixir-data --all` in the container (or in a separate container, with Elixir data volume/directory mounted)
+from cron on the host to periodically update repositories and index new
+releases.
 
-Finally, start the httpd server.
+== Using Docker image as a development server
 
-----
-systemctl restart apache2
-----
+You can easily use the Docker image as a development server by following the steps above, but mounting Elixir source directory from the host
+into `/usr/local/elixir/` in the container when running `docker run elixir`.
 
-
-== Configure SELinux policy
-
-When running systemd with SELinux enabled, httpd server can only visit limited directories.
-If your /path/elixir-data/ is not one of these allowed directories, you will be responded with 500 status code.
-
-To allow httpd server to visit /path/elixir-data/, run following codes:
-----
-chcon -R -t httpd_sys_rw_content_t /path/elixir-data/
-----
-
-To check if it takes effect, run the following codes:
-----
-ls -Z /path/elixir-data/
-----
-
-In case you want to check SELinux log related with httpd, run the following codes:
-----
-audit2why -a | grep httpd | less
-----
-
-== Configure systemd log directory
-
-By default, the error log of elixir will be put in /tmp/elixir-errors.
-However, systemd enables PrivateTmp by default.
-And, the final error directory will be like /tmp/systemd-private-xxxxx-httpd.service-xxxx/tmp/elixir-errors.
-If you want to disable it, configure httpd.service with the following attribute:
-----
-PrivateTmp=false
-----
-
-== Configuration for other servers
-
-Other HTTP servers (like nginx or lighthttpd) may not support WSGI and may require a separate WSGI server, like uWSGI.
-
-Information about how to configure uWSGI with Lighthttpd can be found here:
-https://redmine.lighttpd.net/projects/lighttpd/wiki/HowToPythonWSGI#Python-WSGI-apps-via-uwsgi-SCGI-FastCGI-or-HTTP-using-the-uWSGI-server
-
-Pull requests with example uWSGI configuration for Elixir are welcome.
+Changes in the code made on the host should be automatically reflected in the container.
+You can use `apache2ctl` to restart Apache.
+Error logs are available in `/var/log/apache2/error.log` within the container.
 
 = REST API usage
 
-After configuring httpd, you can test the API usage:
+Once the container is running, you can test the API usage:
 
 == ident query
 
@@ -248,70 +185,9 @@ The response body is of the following structure:
 At Bootlin, we're using the https://varnish-cache.org/[Varnish http cache]
 as a front-end to reduce the load on the server running the Elixir code.
 
- .-------------.           .---------------.           .-----------------------.
- | Http client | --------> | Varnish cache | --------> | Apache running Elixir |
- '-------------'           '---------------'           '-----------------------'
-
-== Keeping Elixir databases up to date
-
-To keep your Elixir databases up to date and index new versions that are released,
-we're proposing to use a script like `index /srv/elixir-data --all` which is called
-through a daily cron job.
-
-You can set `$ELIXIR_THREADS` if you want to change the number of threads used by
-update.py for indexing (by default the number of CPUs on your system).
-
-= Building Docker images
-
-Dockerfiles are provided in the `docker/` directory.
-To build the image, run the following commands:
-
- # git clone https://github.com/bootlin/elixir.git ./elixir
- # docker build -t elixir --build-arg ELIXIR_VERSION=`git rev-parse --short HEAD` -f ./elixir/docker/Dockerfile ./elixir
-
-ELIXIR_VER build argument is optional. Since .git directory is not copied into Docker image by default,
-the option is used to pass a version string to Elixir.
-
-You can then run the image using `docker run`.
-Here we mount a host directory as Elixir data:
-
- # mkdir ./elixir-data
- # docker run -v ./elixir-data/:/srv/elixir-data -d --name elixir-container elixir
-
-The Docker image does not contain any repositories.
-To index a repository, you can use the `index-repository` script.
-For example, to add the https://musl.libc.org/[musl] repository, run:
-
- # docker exec -it elixir-container index /srv/elixir-data musl
-
-Or, to run indexing in a separate container:
-
- # docker run -v ./elixir-data/:/srv/elixir-data \
-    --entrypoint index elixir /srv/elixir-data musl
-
-You can also use `index /srv/elixir-data --all` to start indexing all officially supported repositories.
-
-After indexing is done, Elixir should be available under the following URL on your host:
-http://172.17.0.2/musl/latest/source
-
-If 172.17.0.2 does not answer, you can check the IP address of the container by running:
-
- # docker inspect elixir-container | grep IPAddress
-
-== Automatic repository updates
-
-The Docker image does not automatically update repositories by itself.
-You can, for example, start `index /srv/elixir-data --all` in the container (or in a separate container, with Elixir data volume/directory mounted)
-from cron on the host to periodically update repositories.
-
-== Using Docker image as a development server
-
-You can easily use the Docker image as a development server by following the steps above, but mounting Elixir source directory from the host
-into `/usr/local/elixir/` in the container when running `docker run elixir`.
-
-Changes in the code made on the host should be automatically reflected in the container.
-You can use `apache2ctl` to restart Apache.
-Error logs are available in `/var/log/apache2/error.log` within the container.
+ .-------------.           .---------------.           .---------------------------.
+ | Http client | --------> | Varnish cache | --------> | Elixir container (Apache) |
+ '-------------'           '---------------'           '---------------------------'
 
 = Hardware requirements
 
@@ -343,52 +219,40 @@ Elixir's assumptions:
 * All project releases are associated to a given git tag. Elixir
 only considers such tags.
 
-First make an installation of Elixir by following the above instructions.
+First make an installation of Elixir by following the above instructions
+and index at least one project, to make sure it works.
 See the `projects` subdirectory for projects that are already supported.
 
-Once Elixir works for at least one project, it's time to clone the git
-repository for the project you want to support:
+Supporting a new project requires changes in two places:
 
- cd /srv/git
- git clone --bare https://github.com/zephyrproject-rtos/zephyr
+. Declare the project's git remotes: add an `add_default_remotes` line at the
+end of `utils/index`, giving the project name and its remote URL(s):
++
+----
+add_default_remotes $1 $# $2 zephyr https://github.com/zephyrproject-rtos/zephyr
+----
++
+The project name *must* match the name of the file created below.
 
-After doing this, you may also reference and fetch remote branches for this project,
-for example corresponding to the `stable` tree for the Linux kernel (see the
-instructions for Linux earlier in this document).
-
-Now, in your `LXR_PROJ_DIR` directory, create a new directory for the
-new project:
-
- cd $LXR_PROJ_DIR
- mkdir -p zephyr/data
- ln -s /srv/git/zephyr.git repo
- export LXR_DATA_DIR=$LXR_PROJ_DIR/data
- export LXR_REPO_DIR=$LXR_PROJ_DIR/repo
-
-Now, go back to the Elixir sources and test that tags are correctly
-extracted:
-
- ./script.sh list-tags
+. Describe the project's tags: create a `projects/<projectname>.sh` file
+(for example `projects/zephyr.sh`).
 
 Depending on how you want to show the available versions on the Elixir pages,
 you may have to apply substitutions to each tag string, for example to add
 a `v` prefix if missing, for consistency with how other project versions are
 shown. You may also decide to ignore specific tags. All this can be done
-by redefining the default `list_tags()` function in a new `projects/<projectname>.sh`
-file. Here's an example (`projects/zephyr.sh` file):
+by redefining the default `list_tags()` function. Here's an example
+(`projects/zephyr.sh` file):
 
  list_tags()
  {
      echo "$tags" |
-     grep -v '^zephyr-v'
+         grep -v '^zephyr-v'
  }
-
-Note that `<project_name>` *must* match the name of the directory that
-you created under `LXR_PROJ_DIR`.
 
 The next step is to make sure that versions are classified as you wish
 in the version menu. This classification work is done through the
-`list_tags_h()` function which generates the output of the `./scripts.sh list-tags -h`
+`list_tags_h()` function which generates the output of the `./script.sh list-tags -h`
 command. Here's what you get for the Linux project:
 
  v4 v4.16 v4.16
@@ -413,19 +277,23 @@ to customize the `list_tags_h` function.
 You should also make sure that Elixir properly identifies
 the most recent versions:
 
- ./script.sh get-latest-tags | head
+ # docker exec \
+    -e LXR_REPO_DIR=/srv/elixir-data/zephyr/repo \
+    -e LXR_DATA_DIR=/srv/elixir-data/zephyr/data \
+    elixir-container ./script.sh get-latest-tags | head
 
 If needed, customize the `get_latest_tags()` function.
 
 If you want to enable support for `compatible` properties in Devicetree files,
 add `dts_comp_support=1` at the beginning of `projects/<projectname>.sh`.
 
-You are now ready to generate Elixir's database for your
-new project:
+You are now ready to index the new project. Rebuild the Docker image
+(as `utils/index` and `projects/` are copied into it), then run:
 
- ./update.py <number of threads>
+ # docker exec -it elixir-container index /srv/elixir-data zephyr
 
-You can then check that Elixir works through your http server.
+You can then check that Elixir works through the web pages served by the
+container.
 
 == Coding style
 
@@ -439,8 +307,22 @@ request on GitHub].
 
 = Automated testing
 
-Elixir includes a simple test suite in `t/`.  To run it,
-from the top-level Elixir directory, run:
+Elixir includes a test suite in `t/`.
+
+== In a Docker container
+
+The test suite and all its dependencies are part of the Docker image, so you
+can run it without installing anything else on the host (assuming the image
+was built as shown earlier):
+
+ # docker run --rm --entrypoint prove elixir
+
+== On the host
+
+Running the suite on a host requires: Perl, Git, Python >= 3.8 with the
+packages listed in `requirements.txt` (including `berkeleydb`, which needs
+the Berkeley DB development files to build), and Universal Ctags.
+From the top-level Elixir directory, run:
 
  prove
 
