@@ -73,7 +73,8 @@ C<TestHelpers/find_program> if not specified.
 
 =head2 query_py
 
-As L</script_sh>, but for C<query.py>.
+As L</script_sh>, but for C<utils/query.py> (the query command line
+interface).
 
 =head2 update_py
 
@@ -81,7 +82,8 @@ As L</script_sh>, but for C<update.py>.
 
 =head2 web_py
 
-As L</script_sh>, but for C<web.py>.
+As L</script_sh>, but for C<t/web_cgi.py>, a CGI front end to the web
+interface (see its source for details).
 
 =head2 find_doc
 
@@ -96,13 +98,13 @@ has script_sh => (
     default => sub { find_program('script.sh') }
 );
 has query_py => (
-    default => sub { find_program('elixir', 'query.py') }
+    default => sub { find_program('utils', 'query.py') }
 );
 has update_py => (
     default => sub { find_program('update.py') }
 );
 has web_py => (
-    default => sub { find_program('elixir', 'web.py') }
+    default => sub { find_program('t', 'web_cgi.py') }
 );
 has find_doc => (
     default => sub { find_program('find-file-doc-comments.pl') }

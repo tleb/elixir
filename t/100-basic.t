@@ -80,12 +80,12 @@ ok( (-r File::Spec->catfile($db_dir, $_)), "$_ exists" )
 # Spot-check some identifiers
 
 run_produces_ok('ident query (nonexistent)',
-    [$query_py, qw(v5.4 ident SOME_NONEXISTENT_IDENTIFIER_XYZZY_PLUGH C)],
+    [$query_py, qw(ident v5.4 SOME_NONEXISTENT_IDENTIFIER_XYZZY_PLUGH C)],
     [qr{^Symbol Definitions:}, qr{^Symbol References:}, qr{^\s*$}],
     MUST_SUCCEED);
 
 run_produces_ok('ident query (existent)',
-    [$query_py, qw(v5.4 ident i2c_acpi_notify C)],
+    [$query_py, qw(ident v5.4 i2c_acpi_notify C)],
     [qr{^Symbol Definitions:}, qr{^Symbol References:},
         { def => qr{drivers/i2c/i2c-core-acpi\.c.+\b402\b.+\bfunction\b} },
         { ref => qr{drivers/i2c/i2c-core-acpi\.c.+\b439} },
@@ -93,7 +93,7 @@ run_produces_ok('ident query (existent)',
     MUST_SUCCEED);
 
 run_produces_ok('ident query (existent, #131)',
-    [$query_py, qw(v5.4 ident class C)],
+    [$query_py, qw(ident v5.4 class C)],
     [qr{^Symbol Definitions:}, qr{^Symbol References:},
         { def => qr{issue131\.h.+\b9\b.+\bstruct\b} },
         { ref => qr{issue131\.h.+\b13}  },
@@ -101,7 +101,7 @@ run_produces_ok('ident query (existent, #131)',
     MUST_SUCCEED);
 
 run_produces_ok('ident query (existent, #150)',
-    [$query_py, qw(v5.4 ident memset C)],
+    [$query_py, qw(ident v5.4 memset C)],
     [qr{^Symbol Definitions:}, qr{^Symbol References:},
         { def => qr{issue150\.S.+\b7\b.+\bfunction\b} },
         { ref => qr{i2c-core-acpi\.c.+\b121\b} }
@@ -109,21 +109,21 @@ run_produces_ok('ident query (existent, #150)',
     MUST_SUCCEED);
 
 run_produces_ok('ident query (ENTRY that should not be detected, #150)',
-    [$query_py, qw(v5.4 ident), 'HYPERVISOR_##hypercall', 'C'],
+    [$query_py, qw(ident v5.4), 'HYPERVISOR_##hypercall', 'C'],
     [qr{^Symbol Definitions:}, qr{^Symbol References:},
         { def => { not => qr{hypercall\.S} } },
     ],
     MUST_SUCCEED);
 
 run_produces_ok('ident query (ENTRY that should not be detected, #150)',
-    [$query_py, qw(v5.4 ident), '0xfffffffe', 'C'],
+    [$query_py, qw(ident v5.4), '0xfffffffe', 'C'],
     [qr{^Symbol Definitions:}, qr{^Symbol References:},
         { def => { not => qr{bcm74xx_sprom\.c} } },
     ],
     MUST_SUCCEED);
 
 run_produces_ok('ident query (existent, #228)',
-    [$query_py, qw(v5.4 ident sys_init_module C)],
+    [$query_py, qw(ident v5.4 sys_init_module C)],
     [qr{^Symbol Definitions:}, qr{^Symbol References:},
         { def => qr{syscall_define\.c.+\b1\b.+\bfunction\b} }
     ],
@@ -132,21 +132,21 @@ run_produces_ok('ident query (existent, #228)',
 # Spot-check some files
 
 run_produces_ok('file query (nonexistent)',
-    [$query_py, qw(v5.4 file /SOME_NONEXISTENT_FILENAME_XYZZY_PLUGH)],
+    [$query_py, qw(file v5.4 /SOME_NONEXISTENT_FILENAME_XYZZY_PLUGH)],
     [{not => qr{\S}}]);
 
 run_produces_ok('file query (existent), .h',
-    [$query_py, qw(v5.4 file /drivers/i2c/i2c-dev.c)],
+    [$query_py, qw(file v5.4 /drivers/i2c/i2c-dev.c)],
     [qr{\S}],
     MUST_SUCCEED);
 
 run_produces_ok('file query (existent), .c',
-    [$query_py, qw(v5.4 file /drivers/i2c/i2c-dev.c)],
+    [$query_py, qw(file v5.4 /drivers/i2c/i2c-dev.c)],
     [qr{i2c-dev\.c}, qr{\bVogl\b}],
     MUST_SUCCEED);
 
 run_produces_ok('file query (existent), .h',
-    [$query_py, qw(v5.4 file /drivers/i2c/i2c-core.h)],
+    [$query_py, qw(file v5.4 /drivers/i2c/i2c-core.h)],
     [qr{i2c-core\.h}, qr{\bWe\b}],
     MUST_SUCCEED);
 

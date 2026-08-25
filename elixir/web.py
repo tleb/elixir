@@ -783,7 +783,8 @@ class RequestContextMiddleware:
 
     def process_request(self, req, _resp):
         req.context = RequestContext(
-            Config(req.env['LXR_PROJ_DIR'], ELIXIR_VERSION_STRING, ELIXIR_REPO_LINK),
+            Config(req.env.get('LXR_PROJ_DIR') or os.getenv('LXR_PROJ_DIR'),
+                  ELIXIR_VERSION_STRING, ELIXIR_REPO_LINK),
             self.jinja_env,
             logging.getLogger(__name__),
             self.versions_cache,
