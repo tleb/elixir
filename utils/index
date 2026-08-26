@@ -9,13 +9,17 @@ fi
 # $1 is the project path (inside will be created data/ and repo/).
 # It supports being called on an existing project.
 project_init() {
+    # update.py expects the data directory to exist; mkdir is idempotent
+    # and must also run for already-initialized repositories.
+    mkdir -p $1/data
+
     # Detect already inited projects. Avoids stderr logs.
     # Using `git tag -n1` because `git status` doesn't work on bare repos.
     if git -C $1/repo tag -n1 >/dev/null 2>/dev/null; then
         return;
     fi
 
-    mkdir -p $1/data $1/repo
+    mkdir -p $1/repo
 
     git -C $1/repo -c init.defaultBranch=main init --bare
 }
