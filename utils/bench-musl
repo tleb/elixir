@@ -1,0 +1,90 @@
+#!/bin/bash
+#
+# Index a pinned musl seed once and print one table row.
+#
+# Columns (tab-separated):
+#   commit wall user sys rss_MiB vers blobs defs refs data_MiB subject
+#
+# Benchmark every commit of this series (docker required, run from the
+# repository root):
+#
+#   { echo -e 'commit\twall\tuser\tsys\trss_MiB\tvers\tblobs\tdefs\trefs\tdata_MiB\tsubject' \
+#       > /tmp/musl-bench.tsv; \
+#     git rebase --exec='utils/bench-musl >> /tmp/musl-bench.tsv' aae38bb; }
+#   column -t -s"$(printf '\t')" /tmp/musl-bench.tsv
+#
+# The replay starts at this script's own commit, whose tree is aae38bb
+# plus this file, so the first row is the pre-rework baseline. A commit
+# whose indexing fails aborts the rebase.
+#
+# Environment:
+#   MUSL_SEED      bare git repo holding the musl tags to index
+#                  (default /tmp/musl-seed.git, fetched on first use;
+#                  rows are comparable only against the same seed)
+#   ELIXIR_IMAGE   image carrying the runtime dependencies
+#                  (default "elixir", built from docker/Dockerfile)
+
+set -euo pipefail
+
+SEED=${MUSL_SEED:-/tmp/musl-seed.git}
+IMAGE=${ELIXIR_IMAGE:-elixir}
+
+if [ ! -d "$SEED" ]; then
+    echo "bench: fetching musl tags into $SEED (once)" >&2
+    git init -q --bare "$SEED"
+    git -C "$SEED" remote add origin https://git.musl-libc.org/git/musl
+    git -C "$SEED" fetch -q origin '+refs/tags/*:refs/tags/*' --no-tags
+fi
+
+work=$(mktemp -d /tmp/bench-musl.XXXXXX)
+trap 'rm -rf "$work"' EXIT
+cp -r "$SEED" "$work/repo"
+mkdir "$work/data"
+
+cat > "$work/wrap.py" <<'EOF'
+import resource, subprocess, sys, time
+
+t0 = time.monotonic()
+p = subprocess.run(["python3", "update.py"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+wall = time.monotonic() - t0
+if p.returncode:
+    sys.stderr.write(p.stderr.decode("utf-8", "replace"))
+    raise SystemExit(p.returncode)
+
+# Resource usage of waited children rolls up transitively, so this
+# covers the whole tree: update.py plus every bash, git, perl and
+# ctags process it spawned. ru_maxrss is the tree's largest process,
+# not the sum.
+ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+print("TIMES %.1f %.1f %.1f %.1f" %
+      (wall, ru.ru_utime, ru.ru_stime, ru.ru_maxrss / 1024.0))
+EOF
+
+out=$(docker run --rm \
+    --entrypoint bash \
+    --user "$(id -u):$(id -g)" \
+    -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 \
+    -e LXR_REPO_DIR=/w/repo -e LXR_DATA_DIR=/w/data \
+    -v "$PWD":/src:ro -v "$work":/w \
+    "$IMAGE" -c '
+        git config --global --add safe.directory "*" &&
+        cd /src &&
+        python3 /w/wrap.py &&
+        python3 utils/query.py stats') || {
+    echo "bench: indexing failed at $(git rev-parse --short HEAD)" >&2
+    exit 1
+}
+
+times=$(awk '/^TIMES/ {print $2, $3, $4, $5}' <<< "$out")
+read -r vers blobs defs refs <<< "$(awk '
+    /^Versions:/    { v = $2 }
+    /^Blobs:/       { b = $2 }
+    /^Definitions:/ { d = $2 }
+    /^References:/  { r = $2 }
+    END { print v, b, d, r }' <<< "$out")"
+mib=$(du -sm "$work/data" | cut -f1)
+
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(git rev-parse --short HEAD)" $times "$vers" "$blobs" "$defs" \
+    "$refs" "$mib" "$(git log -1 --format=%s)"
