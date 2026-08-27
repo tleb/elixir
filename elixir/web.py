@@ -27,7 +27,7 @@ import time
 import datetime
 from collections import OrderedDict, namedtuple
 from re import search, sub
-from typing import Any, Callable, NamedTuple, Tuple
+from typing import Any, Callable, Tuple
 from urllib import parse
 import falcon
 import jinja2
@@ -253,7 +253,7 @@ def stringify_ident_path(project, version, family, ident) -> str:
 # Handles redirect from ident with form (POST/GET with query parameters)
 # to default ident URL format
 class IdentPostRedirectResource:
-    def on_get(self, req, resp, project: str, version: str, family: str|None = None, _ident: str|None = None):
+    def on_get(self, req, resp, project: str, version: str):
         get_ident = req.get_param('i', required=False)
         get_family = req.get_param('f', required=False)
         if get_ident is None:
@@ -263,7 +263,7 @@ class IdentPostRedirectResource:
         else:
             return self.handle(req, resp, project, version, get_ident, get_family)
 
-    def on_post(self, req, resp, project: str, version: str, family: str|None = None, _ident: str|None = None):
+    def on_post(self, req, resp, project: str, version: str):
         form = req.get_media()
         post_ident = form.get('i')
         post_family = form.get('f')
