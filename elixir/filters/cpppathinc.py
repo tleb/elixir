@@ -1,6 +1,6 @@
 import re
 from typing import List
-from .utils import Filter, FilterContext, encode_number, decode_number, extension_matches
+from .utils import Filter, FilterContext, extension_matches
 
 # Filters for cpp includes like these:
 # #include <file>
@@ -15,7 +15,6 @@ class CppPathIncFilter(Filter):
     def __init__(self, prefix_path: List[str] = ["include"], *args, **kwargs):
         self.prefix_path = prefix_path
         super().__init__(*args, **kwargs)
-        self.cpppathinc = []
 
     def check_if_applies(self, ctx) -> bool:
         return super().check_if_applies(ctx) and \
@@ -31,14 +30,13 @@ class CppPathIncFilter(Filter):
                 # Because there are then multiple include possibilites, one per architecture
                 return m.group(0)
             else:
-                self.cpppathinc.append(inc)
-                return f'{ m1 }#include{ m2 }<__KEEPCPPPATHINC__{ encode_number(len(self.cpppathinc)) }>'
+                return f'{ m1 }#include{ m2 }<__KEEPCPPPATHINC__{ self.keep(inc) }>'
 
         return re.sub('^(\s*)#include(\s*)<(.*?)>', keep_cpppathinc, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_cpppathinc(m):
-            w = self.cpppathinc[decode_number(m.group(1)) - 1]
+            w = self.kept(m.group(1))
             for p in self.prefix_path:
                 path = f"/{p}/{w}"
                 if ctx.query.file_exists(ctx.tag, path):

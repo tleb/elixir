@@ -1,5 +1,5 @@
 import re
-from .utils import Filter, FilterContext, encode_number, decode_number, extension_matches
+from .utils import Filter, FilterContext, extension_matches
 
 # Filter for DT compatible strings in code (C family) files
 # Finds assigments to properties and variables named 'compatible' and recognized by
@@ -7,10 +7,6 @@ from .utils import Filter, FilterContext, encode_number, decode_number, extensio
 # .compatible = "device"
 # Example: u-boot/v2023.10/source/drivers/phy/nop-phy.c#L84
 class DtsCompCodeFilter(Filter):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.dtscompC = []
-
     def check_if_applies(self, ctx) -> bool:
         return super().check_if_applies(ctx) and \
             ctx.query.dts_comp_support and \
@@ -24,15 +20,14 @@ class DtsCompCodeFilter(Filter):
             return code
 
         def keep_dtscompC(m):
-            self.dtscompC.append(m.group(4))
-            return f'{ m.group(1) }"__KEEPDTSCOMPC__{ encode_number(len(self.dtscompC)) }"'
+            return f'{ m.group(1) }"__KEEPDTSCOMPC__{ self.keep(m.group(4)) }"'
 
         return re.sub('(\s*{*\s*\.(\033\[31m)?compatible(\033\[0m)?\s*=\s*)\"(.+?)\"',
                       keep_dtscompC, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_dtscompC(m):
-            i = self.dtscompC[decode_number(m.group(1)) - 1]
+            i = self.kept(m.group(1))
             return f'<a class="ident" href="{ ctx.get_ident_url(i, "B") }">{ i }</a>'
 
         return re.sub('__KEEPDTSCOMPC__([A-J]+)', replace_dtscompC, html, flags=re.MULTILINE)

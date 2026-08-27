@@ -1,29 +1,24 @@
 from os.path import dirname
 import re
-from .utils import Filter, FilterContext, decode_number, encode_number, filename_without_ext_matches
+from .utils import Filter, FilterContext, filename_without_ext_matches
 
 # Filters for Makefile file includes like these:
 # file.o
 # Example: u-boot/v2023.10/source/Makefile#L1767
 class MakefileOFilter(Filter):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.makefileo = []
-
     def check_if_applies(self, ctx) -> bool:
         return super().check_if_applies(ctx) and \
                 filename_without_ext_matches(ctx.filepath, {'Makefile'})
 
     def transform_raw_code(self, ctx, code: str) -> str:
         def keep_makefileo(m):
-            self.makefileo.append(m.group(1))
-            return f'__KEEPMAKEFILEO__{ encode_number(len(self.makefileo)) }.o'
+            return f'__KEEPMAKEFILEO__{ self.keep(m.group(1)) }.o'
 
         return re.sub('(?<=\s)([-\w/]+)\.o(?!\w)(?! :?=)', keep_makefileo, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_makefileo(m):
-            w = self.makefileo[decode_number(m.group(1)) - 1]
+            w = self.kept(m.group(1))
 
             filedir = dirname(ctx.filepath)
             if filedir != '/':

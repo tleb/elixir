@@ -1,5 +1,5 @@
 import re
-from .utils import Filter, FilterContext, encode_number, decode_number
+from .utils import Filter, FilterContext
 
 # Filter for kconfig identifier links
 # Replaces KConfig identifiers with links to definitions and references
@@ -7,20 +7,15 @@ from .utils import Filter, FilterContext, encode_number, decode_number
 # Example: u-boot/v2023.10/source/Kconfig#L17
 # Note: Prepends identifier with CONFIG_
 class KconfigIdentsFilter(Filter):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.kconfigidents = []
-
     def transform_raw_code(self, ctx, code: str) -> str:
       def keep_kconfigidents(m):
-          self.kconfigidents.append(m.group(1))
-          return f'__KEEPKCONFIGIDENTS__{ encode_number(len(self.kconfigidents)) }'
+          return f'__KEEPKCONFIGIDENTS__{ self.keep(m.group(1)) }'
 
       return re.sub('\033\[31m(?=CONFIG_)(.*?)\033\[0m', keep_kconfigidents, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_kconfigidents(m):
-            i = self.kconfigidents[decode_number(m.group(2)) - 1]
+            i = self.kept(m.group(2))
 
             n = i
             #Remove the CONFIG_ when we are in a Kconfig file

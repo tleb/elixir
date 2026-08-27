@@ -31,6 +31,16 @@ class FilterContext:
 class Filter:
     def __init__(self, path_exceptions: List[str] = []):
         self.path_exceptions = path_exceptions
+        self.keeps = [] # texts stashed by transform_raw_code, restored by untransform_formatted_code
+
+    # Stash text and return its encoded index
+    def keep(self, text):
+        self.keeps.append(text)
+        return encode_number(len(self.keeps))
+
+    # Retrieve a text stashed by keep()
+    def kept(self, encoded):
+        return self.keeps[decode_number(encoded) - 1]
 
     # Return True if filter can be applied to file with path
     def check_if_applies(self, ctx: FilterContext) -> bool:
