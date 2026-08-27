@@ -67,9 +67,8 @@ class ProjectConverter(falcon.routing.BaseConverter):
             raise falcon.HTTPBadRequest('Error', 'Invalid project name')
         return project
 
-def validate_version(version) -> str|None:
-    if version is not None and re.match(r'^[a-zA-Z0-9_.,:/-]+$', version):
-        return version.strip()
+# Validating a version follows the same rules as a project name
+validate_version = validate_project
 
 def validate_ident(ident: str) -> str|None:
     if ident is not None and re.match(r'^[A-Za-z0-9_,.+?#-]+$', ident):
