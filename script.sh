@@ -96,20 +96,22 @@ get_dir()
 
 list_blobs()
 {
-    v=`echo $opt2 | version_rev`
-
-    if [ "$opt1" = '-p' ]; then
+    case $opt1 in
+    "-p")
         # "path" option: return blob hash and full path
         format='\1 \2'
-    elif [ "$opt1" = '-f' ]; then
+        ;;
+    "-f")
         # "file" option: return blob hash and file name (without its path)
         format='\1 \4'
-    else
-        # default option: return only blob hash
-        format='\1'
-        v=`echo $opt1 | version_rev`
-    fi
+        ;;
+    *)
+        echo "$0: list-blobs requires -p or -f"
+        exit 1
+        ;;
+    esac
 
+    v=`echo $opt2 | version_rev`
     git ls-tree -r "$v" |
     sed -r "s/^\S* blob (\S*)\t(([^/]*\/)*(.*))$/$format/; /^\S* commit .*$/d"
 }
