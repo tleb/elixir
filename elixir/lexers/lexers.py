@@ -370,7 +370,6 @@ class MakefileLexer:
     # NOTE same as in KConfig, we only care about screaming case names
     make_identifier = r'[A-Z0-9_]+'
     make_minor_identifier = r'[a-zA-Z0-9_][a-zA-Z0-9-_]*'
-    make_variable = r'(\$\([a-zA-Z0-9_-]\)|\$\{[a-zA-Z0-9_-]\})'
     make_single_quote_string = r"'*?'"
     make_string = f'(({ make_single_quote_string })|({ shared.double_quote_string_with_escapes }))'
     make_escape = r'\\[#"\']'
