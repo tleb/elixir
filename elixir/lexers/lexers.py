@@ -33,8 +33,8 @@ class CLexer:
     def __init__(self, code):
         self.code = code
 
-    def lex(self, **kwargs):
-        return simple_lexer(self.rules, self.code, **kwargs)
+    def lex(self):
+        return simple_lexer(self.rules, self.code)
 
 
 # https://www.devicetree.org/specifications/
@@ -142,8 +142,8 @@ class DTSLexer:
     def __init__(self, code):
         self.code = code
 
-    def lex(self, **kwargs):
-        return simple_lexer(self.rules, self.code, **kwargs)
+    def lex(self):
+        return simple_lexer(self.rules, self.code)
 
 
 # https://www.kernel.org/doc/html/next/kbuild/kconfig-language.html#kconfig-syntax

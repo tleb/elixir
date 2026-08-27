@@ -77,13 +77,12 @@ class FirstInLine:
             return self.rule.match(code, pos)
 
 class LexerContext:
-    def __init__(self, code, pos, line, filter_tokens):
+    def __init__(self, code, pos, line):
         self.code = code
         self.pos = pos
         self.line = line
-        self.filter_tokens = filter_tokens
 
-def simple_lexer(rules, code, filter_tokens=None):
+def simple_lexer(rules, code):
     if len(code) == 0:
         return
 
@@ -121,20 +120,14 @@ def simple_lexer(rules, code, filter_tokens=None):
                 rule_matched = True
 
                 if isinstance(action, TokenType):
-                    # only parse tokens of interest - slices apparently copy
-                    if filter_tokens is None or action in filter_tokens:
-                        token = code[span[0]:span[1]]
-                    else:
-                        token = None
-
-                    token_obj = Token(action, token, span, line)
+                    token_obj = Token(action, code[span[0]:span[1]], span, line)
                     yield token_obj
                     line += code.count('\n', span[0], span[1])
                     pos = span[1]
                     break
                 elif callable(action):
                     last_token = None
-                    for token in action(LexerContext(code, pos, line, filter_tokens), match):
+                    for token in action(LexerContext(code, pos, line), match):
                         last_token = token
                         yield token
 
