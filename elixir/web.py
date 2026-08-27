@@ -30,7 +30,7 @@ from urllib import parse
 import falcon
 import jinja2
 
-from .lib import validFamily, getFileFamily
+from .lib import CURRENT_DIR, validFamily, getFileFamily
 from .query import Query, SymbolInstance
 from .filters import get_filters
 from .filters.utils import FilterContext
@@ -731,9 +731,7 @@ def generate_ident_page(ctx: RequestContext, q: Query,
 
 
 def get_jinja_env():
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    templates_dir = os.path.join(script_dir, '../templates/')
-    loader = jinja2.FileSystemLoader(templates_dir)
+    loader = jinja2.FileSystemLoader(os.path.join(CURRENT_DIR, 'templates'))
     return jinja2.Environment(loader=loader)
 
 # see https://falcon.readthedocs.io/en/v3.1.2/user/recipes/raw-url-path.html

@@ -7,9 +7,8 @@ from typing import Dict, NamedTuple
 import falcon
 import jinja2
 
-from .lib import run_cmd
+from .lib import CURRENT_DIR, run_cmd
 
-ELIXIR_DIR = os.path.normpath(os.path.dirname(__file__) + "/../")
 ELIXIR_REPO_LINK = 'https://github.com/bootlin/elixir/'
 
 def get_elixir_version_string():
@@ -20,8 +19,8 @@ def get_elixir_version_string():
     try:
         # try to get Elixir version from git
         result, return_code = run_cmd('git',
-            '-C', ELIXIR_DIR,
-            '-c', f'safe.directory={ ELIXIR_DIR }',
+            '-C', CURRENT_DIR,
+            '-c', f'safe.directory={ CURRENT_DIR }',
             'rev-parse', '--short', 'HEAD'
         )
 
