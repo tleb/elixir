@@ -114,14 +114,6 @@ list_blobs()
     sed -r "s/^\S* blob (\S*)\t(([^/]*\/)*(.*))$/$format/; /^\S* commit .*$/d"
 }
 
-untokenize()
-{
-    tr -d '\n' |
-    sed 's/>/\*\//g' |
-    sed 's/</\/\*/g' |
-    tr '\1\2\3' '\n<>'
-}
-
 parse_defs()
 {
     case $opt3 in
@@ -248,10 +240,6 @@ case $cmd in
 
     list-blobs)
         list_blobs
-        ;;
-
-    untokenize)
-        untokenize
         ;;
 
     parse-defs)
