@@ -78,8 +78,9 @@ def get_github_issue_url(details: str):
     return "https://github.com/bootlin/elixir/issues/new?body=" + parse.quote(body)
 
 
-# Generate an error page from ElixirProjectError
-def get_project_error_page(req, resp, exception: ElixirProjectError):
+# Generate an error page from ElixirProjectError or plain falcon errors;
+# adds project details only when the exception carries them
+def get_error_page(req, resp, exception):
     report_error_details = generate_error_details(req, resp, exception.title, exception.description)
 
     template_ctx = {
@@ -99,7 +100,7 @@ def get_project_error_page(req, resp, exception: ElixirProjectError):
         'error_title': exception.title,
     }
 
-    if exception.project is not None and exception.query is not None:
+    if getattr(exception, 'project', None) is not None and getattr(exception, 'query', None) is not None:
         # Add details about current project
         query = exception.query
         project = exception.project
@@ -133,40 +134,17 @@ def get_project_error_page(req, resp, exception: ElixirProjectError):
 
     template_ctx = {
         **template_ctx,
-        **exception.extra_template_args,
+        **getattr(exception, 'extra_template_args', {}),
     }
 
     template = req.context.jinja_env.get_template('error.html')
     result = template.render(template_ctx)
 
-    if exception.query is not None:
-        exception.query.close()
+    query = getattr(exception, 'query', None)
+    if query is not None:
+        query.close()
 
     return result
-
-# Generate an error page from falcon exceptions
-def get_error_page(req, resp, exception: ElixirProjectError):
-    report_error_details = generate_error_details(req, resp, exception.title, exception.description)
-
-    template_ctx = {
-        'projects': get_projects(req.context.config.project_dir),
-        'topbar_families': TOPBAR_FAMILIES,
-        'current_version_path': (None, None, None),
-        'current_family': 'A',
-        'source_base_url': '/',
-
-        'referer': req.referer,
-        'bug_report_url': get_github_issue_url(report_error_details),
-        'report_error_details': report_error_details,
-
-        'error_title': exception.title,
-    }
-
-    if exception.description is not None:
-        template_ctx['error_details'] = exception.description
-
-    template = req.context.jinja_env.get_template('error.html')
-    return template.render(template_ctx)
 
 # Validates project and version, returns project, version and query.
 # To be used in project/version URLs
@@ -801,10 +779,7 @@ def error_serializer(req, resp, exception):
             resp.data = exception.to_json()
             resp.content_type = falcon.MEDIA_JSON
         elif preferred == falcon.MEDIA_HTML:
-            if isinstance(exception, ElixirProjectError):
-                resp.text = get_project_error_page(req, resp, exception)
-            else:
-                resp.text = get_error_page(req, resp, exception)
+            resp.text = get_error_page(req, resp, exception)
             resp.content_type = falcon.MEDIA_HTML
 
     resp.append_header('Vary', 'Accept')
