@@ -58,8 +58,6 @@ from elixir.data import PathList
 from elixir.project_utils import get_lexer
 from find_compatible_dts import FindCompatibleDTS
 
-verbose = False
-
 dts_comp_support = int(script('dts-comp'))
 
 compatibles_parser = FindCompatibleDTS()
@@ -157,8 +155,6 @@ def update_blob_ids(tag):
             db.file.put(idx, filename)
 
             new_idxes.append(idx)
-            if verbose:
-                print(f"New blob #{idx} {hash}:{filename}")
             idx += 1
     db.vars.put('numBlobs', idx)
     return new_idxes
@@ -184,8 +180,6 @@ def update_versions(tag):
         if path[:33] == b'Documentation/devicetree/bindings':
             bindings_idxes.append(idx)
 
-        if verbose:
-            print(f"Tag {tag}: adding #{idx} {path}")
     db.vers.put(tag, obj, sync=True)
     progress('vers: ' + tag.decode() + ' done')
 
@@ -227,8 +221,6 @@ def update_definitions(idxs):
                     continue
 
                 obj.append(idx, type, line, family)
-                if verbose:
-                    print(f"def {type} {ident} in #{idx} @ {line}")
                 db.defs.put(ident, obj)
 
 
@@ -317,8 +309,6 @@ def update_references(triple_chunks):
                     obj = data.RefList()
 
                 obj.append(idx, lines, family)
-                if verbose:
-                    print(f"ref: {ident} in #{idx} @ {lines}")
                 db.refs.put(ident, obj)
             done += 1
             if done % 10 == 0: progress('refs: chunk %d/%d' % (done, len(triple_chunks)))
@@ -346,8 +336,6 @@ def update_doc_comments(idxs):
                     obj = data.RefList()
 
                 obj.append(idx, str(line), family)
-                if verbose:
-                    print(f"doc: {ident} in #{idx} @ {line}")
                 db.docs.put(ident, obj)
 
 
@@ -379,8 +367,6 @@ def update_compatibles(idxs):
                     obj = data.RefList()
 
                 obj.append(idx, lines, family)
-                if verbose:
-                    print(f"comps: {ident} in #{idx} @ {line}")
                 db.comps.put(ident, obj)
 
 
@@ -413,8 +399,6 @@ def update_compatibles_bindings(idxs):
                     obj = data.RefList()
 
                 obj.append(idx, lines, family)
-                if verbose:
-                    print(f"comps_docs: {ident} in #{idx} @ {line}")
                 db.comps_docs.put(ident, obj)
 
 
