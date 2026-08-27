@@ -60,17 +60,8 @@ def token_from_string(ctx, match, token_type):
     ctx.line = ctx.line+result.token.count('\n')
     return result, ctx
 
-# Interface class that allows to match only if certian conditions,
-# hard to express in regex, are true
-class Matcher:
-    def update_after_match(self, code: str, pos: int, line: int, token: Token) -> None:
-        pass
-
-    def match(self, code: str, pos: int, line: int) -> None | re.Match:
-        pass
-
-# Match token only if it's the first token in line (skipping whitespace)
-class FirstInLine(Matcher):
+# Matches a token only if it's the first token in line (skipping whitespace)
+class FirstInLine:
     whitespace = re.compile(r'\s*')
 
     def __init__(self, regex):
@@ -101,7 +92,6 @@ def simple_lexer(rules, code, filter_tokens=None):
         code += '\n'
 
     rules_compiled = []
-    after_match_hooks = []
 
     # compile rules
     for rule, action in rules:
@@ -111,17 +101,9 @@ def simple_lexer(rules, code, filter_tokens=None):
         # rules can also be callables
         elif callable(rule):
             rules_compiled.append((rule, action))
-        # rules can also be matchers - matchers get more information during parsing,
-        # that information can stored in their state
-        elif isinstance(rule, Matcher):
+        # rules can also be matchers - matchers get more information during parsing
+        elif isinstance(rule, FirstInLine):
             rules_compiled.append((rule.match, action))
-            after_match_hooks.append(rule.update_after_match)
-
-    # helper function that calls hooks before yielding
-    def yield_token(to_yield):
-        for hook in after_match_hooks:
-            hook(code, pos, line, to_yield)
-        return to_yield
 
     pos = 0
     line = 1
@@ -146,7 +128,7 @@ def simple_lexer(rules, code, filter_tokens=None):
                         token = None
 
                     token_obj = Token(action, token, span, line)
-                    yield yield_token(token_obj)
+                    yield token_obj
                     line += code.count('\n', span[0], span[1])
                     pos = span[1]
                     break
@@ -154,7 +136,7 @@ def simple_lexer(rules, code, filter_tokens=None):
                     last_token = None
                     for token in action(LexerContext(code, pos, line, filter_tokens), match):
                         last_token = token
-                        yield yield_token(token)
+                        yield token
 
                     if last_token is not None:
                         pos = last_token.span[1]
@@ -169,7 +151,7 @@ def simple_lexer(rules, code, filter_tokens=None):
         # to decide whether to quit or continue
         if not rule_matched:
             token = Token(TokenType.ERROR, code[pos], (pos, pos+1), line)
-            yield yield_token(token)
+            yield token
             if code[pos] == '\n':
                 line += 1
             pos += 1
