@@ -21,7 +21,7 @@
 from .lib import script, scriptLines, decode, tokenizeFile
 from . import lib
 from . import data
-import os, sys
+import os
 from collections import OrderedDict
 from urllib import parse
 

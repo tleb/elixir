@@ -3,11 +3,11 @@ import re
 import logging
 import threading
 from urllib import parse
-from typing import Any, Dict, NamedTuple
+from typing import Dict, NamedTuple
 import falcon
 import jinja2
 
-from .lib import validFamily, run_cmd
+from .lib import run_cmd
 
 ELIXIR_DIR = os.path.normpath(os.path.dirname(__file__) + "/../")
 ELIXIR_REPO_LINK = 'https://github.com/bootlin/elixir/'

@@ -20,8 +20,6 @@
 
 import logging
 import os
-import sys
-import re
 import threading
 import time
 import datetime

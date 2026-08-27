@@ -17,12 +17,7 @@
 #  You should have received a copy of the GNU Affero General Public License
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
-import json
-import os
-
 import falcon
-from urllib import parse
-import sys
 
 from .query import get_query
 from .lib import validFamily

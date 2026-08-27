@@ -1,5 +1,5 @@
 import re
-from .utils import Filter, FilterContext, extension_matches
+from .utils import Filter, FilterContext
 
 # Filter for kconfig identifier in defconfigs
 # Replaces defconfig identifiers with links to definitions/references

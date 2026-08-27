@@ -17,9 +17,6 @@
 #  You should have received a copy of the GNU Affero General Public License
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
-import sys
-import os
-import json
 from urllib import parse
 from berkeleydb.db import DB_SET_RANGE
 import falcon
