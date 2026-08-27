@@ -420,16 +420,11 @@ def get_versions(versions: OrderedDict[str, OrderedDict[str, str]],
 # Caches get_versions result in a context object
 def get_versions_cached(q, ctx, project):
     with ctx.versions_cache_lock:
-        if project not in ctx.versions_cache:
-            ctx.versions_cache[project] = (time.time(), q.get_versions())
-            cached_versions = ctx.versions_cache[project]
-        else:
-            cached_versions = ctx.versions_cache[project]
-            if time.time()-cached_versions[0] > VERSION_CACHE_DURATION_SECONDS:
-                ctx.versions_cache[project] = (time.time(), q.get_versions())
-                cached_versions = ctx.versions_cache[project]
-
-        return cached_versions[1]
+        timestamp, versions = ctx.versions_cache.get(project, (0, None))
+        if time.time() - timestamp > VERSION_CACHE_DURATION_SECONDS:
+            versions = q.get_versions()
+            ctx.versions_cache[project] = (time.time(), versions)
+        return versions
 
 # Returns template context used by the layout template
 # get_url_with_new_version: see get_url parameter of get_versions
