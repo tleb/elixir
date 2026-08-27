@@ -263,8 +263,5 @@ def compatibleFamily(file_family, requested_family):
 # First argument can be a list of different families
 # Second argument is the key for choosing the right array in the compatibility list
 def compatibleMacro(macro_family, requested_family):
-    result = False
-    for item in macro_family:
-        item += 'M'
-        result = result or item in compatibility_list[requested_family]
-    return result
+    return any(item + 'M' in compatibility_list[requested_family]
+               for item in macro_family)
