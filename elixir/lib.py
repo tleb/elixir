@@ -66,14 +66,7 @@ def tokenizeFile(ver, file, family, env=None):
     yield from tokenize(data, family)
 
 def unescape(bstr):
-    subs = (
-        ('\1','\n'),
-    )
-    for a,b in subs:
-        a = a.encode()
-        b = b.encode()
-        bstr = bstr.replace(a, b)
-    return bstr
+    return bstr.replace(b'\1', b'\n')
 
 def decode(byte_object):
     # decode('ascii') fails on special chars
