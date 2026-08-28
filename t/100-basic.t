@@ -129,6 +129,27 @@ run_produces_ok('ident query (existent, #228)',
     ],
     MUST_SUCCEED);
 
+# Kconfig options: definitions from Kconfig files, references from
+# Makefiles (family M) and Kconfig files (family K), including files
+# in subdirectories
+run_produces_ok('ident query (Kconfig option, references in Makefiles and Kconfigs)',
+    [$query_py, qw(ident v5.4 CONFIG_TESTOPT_FOO K)],
+    [qr{^Symbol Definitions:}, qr{^Symbol References:},
+        { def => qr{(?<!/)Kconfig\b.+\b2\b.+\bconfig\b} },
+        { ref => qr{(?<!/)Makefile\b.+\b3\b} },
+        { ref => qr{drivers/Kconfig\b.+\b4\b} },
+        { ref => qr{drivers/Makefile\b.+\b4\b} }
+    ],
+    MUST_SUCCEED);
+
+run_produces_ok('ident query (Kconfig option defined in a subdirectory Kconfig)',
+    [$query_py, qw(ident v5.4 CONFIG_TESTOPT_BAR K)],
+    [qr{^Symbol Definitions:}, qr{^Symbol References:},
+        { def => qr{drivers/Kconfig\b.+\b2\b.+\bconfig\b} },
+        { ref => qr{drivers/Makefile\b.+\b3\b} }
+    ],
+    MUST_SUCCEED);
+
 # Spot-check some files
 
 run_produces_ok('file query (nonexistent)',

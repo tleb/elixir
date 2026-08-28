@@ -1,0 +1,4 @@
+# Test Kconfig file in a subdirectory, part of the t/tree test suite
+config TESTOPT_BAR
+	tristate "Enable test option BAR"
+	depends on TESTOPT_FOO

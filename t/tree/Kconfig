@@ -1,0 +1,7 @@
+# Test Kconfig file, part of the t/tree test suite
+config TESTOPT_FOO
+	bool "Enable test option FOO"
+	help
+	  Say Y here to enable test option FOO.
+
+	  If unsure, say N.
