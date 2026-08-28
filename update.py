@@ -293,6 +293,7 @@ def update_references(triple_chunks):
     global defs_keys
     defs_keys = set(db.defs.get_keys())
     done = 0
+    total = len(triple_chunks)
     for chunk in refs_pool.imap(_refs_lex_chunk, triple_chunks):
         for idx, family, idents in chunk:
             for ident, lines in idents.items():
@@ -312,8 +313,8 @@ def update_references(triple_chunks):
 
                 obj.append(idx, lines, family)
                 db.refs.put(ident, obj)
-            done += 1
-            if done % 10 == 0: progress('refs: chunk %d/%d' % (done, len(triple_chunks)))
+        done += 1
+        if done % 10 == 0: progress('refs: chunk %d/%d' % (done, total))
 
 
 def update_doc_comments(idxs):
