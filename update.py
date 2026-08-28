@@ -234,7 +234,9 @@ def _refs_lex_chunk(triples):
     '''
     out = []
     for idx, filename, hash in triples:
-        family = lib.getFileFamily(filename)
+        # getFileFamily expects a basename; the name-based families
+        # (kconfig*, makefile*) must match in subdirectories too
+        family = lib.getFileFamily(os.path.basename(filename))
         if family == None: continue
 
         lexer = get_lexer(filename, project)

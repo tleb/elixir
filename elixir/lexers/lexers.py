@@ -276,6 +276,7 @@ class GasLexer:
         'nios2': (r'#',),
         'openrisc': (r'#',),
         'powerpc': (r'#',),
+        'riscv': (r'#',),
         's390': (r'#',),
         'xtensa': (r'#',),
         'microblaze': (r'#',),
