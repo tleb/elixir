@@ -24,13 +24,20 @@
 #
 # Indexing runs in phases, in dependency order, one tag at a time
 # (oldest first): a tag is fully indexed before the next one starts, so
-# every tag is a checkpoint in db.vers and refs cannot race defs of
-# another tag. The phases for one tag:
+# refs cannot race defs of another tag. The phases for one tag:
 #   1. ids:    assign idx numbers to the tag's new blobs
-#   2. vers:   record blob paths for the tag (fills file_paths, bindings_idxes)
+#   2. vers:   collect the tag's blob paths (fills file_paths,
+#      bindings_idxes); the db.vers entry itself is only committed
+#      after phase 5, as the tag's completion marker
 #   3. defs, docs, comps: per-blob indexing independent of each other
 #   4. refs:   references, gated on definitions existing in the database
 #   5. comps_docs: compatibles from DT bindings docs, gated on comps
+#
+# A run interrupted during phases 3 to 5 is detected on the next start
+# through a currentTag marker in variables.db and refused: partial
+# defs/refs entries cannot be rolled back, so the data directory has
+# to be rebuilt rather than silently kept incomplete. Interruptions
+# during phases 1 and 2 need no marker, both are safe to rerun.
 #
 # Phases are sequential: a phase starts only after the previous one
 # finished, so data written by one phase is visible to the next without
@@ -161,6 +168,9 @@ def update_blob_ids(tag):
 
 
 def update_versions(tag):
+    '''Collect the tag's blob paths into a PathList; the caller
+    commits it to db.vers once every phase of the tag has run, so a
+    tag listed in db.vers is fully indexed.'''
     # Get blob hashes and associated file paths
     blobs = scriptLines('list-blobs', '-p', tag)
     buf = []
@@ -180,8 +190,7 @@ def update_versions(tag):
         if path[:33] == b'Documentation/devicetree/bindings':
             bindings_idxes.append(idx)
 
-    db.vers.put(tag, obj, sync=True)
-    progress('vers: ' + tag.decode() + ' done')
+    return obj
 
 
 def generate_defs_caches():
@@ -405,6 +414,16 @@ def update_compatibles_bindings(idxs):
                 db.comps_docs.put(ident, obj)
 
 
+# The vars handle decodes every value as an int (numBlobs), so the
+# in-flight tag marker rides the key, not the value.
+current_tag_prefix = b'currentTag:'
+
+def current_tag():
+    '''The tag the previous run was working on when it died, if any'''
+    for key in db.vars.get_keys():
+        if key.startswith(current_tag_prefix):
+            return key[len(current_tag_prefix):]
+
 # Main
 
 if len(argv) >= 2 and argv[1].isdigit():
@@ -416,6 +435,24 @@ tag_buf = []
 for tag in scriptLines('list-tags'):
     if not db.vers.exists(tag):
         tag_buf.append(tag)
+
+# Refuse a data directory left by a run interrupted mid-tag: its blob
+# ids are registered and its defs/refs are partially written, and a
+# rerun would either skip the tag (it counts as new, but phase 1 sees
+# no new blobs) or duplicate the entries already written. Neither is
+# acceptable, so the only sound recovery is a rebuild.
+interrupted = current_tag()
+if interrupted is not None:
+    if db.vers.exists(interrupted):
+        # The tag finished after all; only the marker cleanup was
+        # lost to the crash.
+        db.vars.delete(current_tag_prefix + interrupted)
+    else:
+        print(project + ' - the data directory is from an interrupted run:'
+              + ' tag ' + interrupted.decode() + ' is partially indexed and'
+              + ' cannot be resumed; rebuild it before updating again',
+              file=sys.stderr)
+        exit(1)
 
 num_tags = len(tag_buf)
 
@@ -434,7 +471,7 @@ refs_pool = multiprocessing.get_context('fork').Pool(num_threads)
 
 def index_tag(tag):
     '''Index one tag: every phase runs for it before the next tag
-    starts, so db.vers records progress tag by tag.'''
+    starts, and db.vers records it only after the last phase.'''
     # Per-tag state, so each tag starts clean
     file_paths.clear()
     bindings_idxes.clear()
@@ -444,8 +481,14 @@ def index_tag(tag):
     idxes = update_blob_ids(tag)
     progress('ids: ' + tag.decode() + ': ' + str(len(idxes)) + ' new blobs')
 
-    # Phase 2: versions
-    update_versions(tag)
+    # Phase 2: versions - collect the paths, commit after phase 5
+    vers_obj = update_versions(tag)
+
+    # From here on the phases write defs, docs, comps and refs, which
+    # cannot be rolled back: mark the tag as in-flight so that a run
+    # interrupted past this point is detected and refused on the next
+    # start instead of silently keeping a partial database.
+    db.vars.put(current_tag_prefix + tag, b'1')
 
     # Phase 3: definitions, doc comments, compatibles
     work = list(chunks(idxes))
@@ -465,6 +508,11 @@ def index_tag(tag):
     # Phase 5: compatibles from bindings documentation (needs all comps)
     if dts_comp_support:
         parallel(update_compatibles_bindings, work)
+
+    # Commit the tag: only now is it fully indexed. The sync makes
+    # the completion marker durable before the marker cleanup.
+    db.vers.put(tag, vers_obj, sync=True)
+    db.vars.delete(current_tag_prefix + tag)
 
     progress('done: ' + tag.decode())
 

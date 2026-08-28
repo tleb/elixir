@@ -183,6 +183,13 @@ class BsdDB:
         if sync:
             self.db.sync()
 
+    def delete(self, key):
+        key = lib.autoBytes(key)
+        try:
+            self.db.delete(key)
+        except berkeleydb.db.DBNotFoundError:
+            pass
+
     def close(self):
         self.db.close()
 

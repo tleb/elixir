@@ -77,6 +77,30 @@ ok( (-r File::Spec->catfile($db_dir, $_)), "$_ exists" )
     foreach qw(blobs.db definitions.db filenames.db hashes.db references.db
                 variables.db versions.db);
 
+# Interrupted-run detection: a currentTag marker for a tag that is not
+# in versions.db must make update.py refuse the data directory
+# instead of silently keeping the partially indexed tag.
+my $poison_marker = 'import sys
+sys.path.insert(0, sys.argv[2])
+import elixir.data as data
+db = data.DB(sys.argv[1], readonly=False, shared=True, dtscomp=False)
+db.vars.put(b"currentTag:" + sys.argv[3].encode(), b"1")
+db.close()';
+
+run_program('python3', '-c', $poison_marker, $db_dir, sibling_abs_path(''), 'v9.9')
+    or die "could not poison variables.db";
+my ($exit_status, $lrStdout, $lrStderr) = run_program($tenv->update_py);
+cmp_ok($exit_status, '!=', 0, 'update refuses an interrupted run');
+ok( (grep { m{interrupted run} } @$lrStderr),
+    'update explains the interrupted run on stderr' );
+
+# A marker left over from a crash after the commit is cleaned up, not
+# mistaken for an interrupted run
+run_program('python3', '-c', $poison_marker, $db_dir, sibling_abs_path(''), 'v5.4')
+    or die "could not poison variables.db";
+run_produces_ok('stale marker for a finished tag is cleaned',
+    [$tenv->update_py], [qr{found 0 new tags}], MUST_SUCCEED);
+
 # Spot-check some identifiers
 
 run_produces_ok('ident query (nonexistent)',
