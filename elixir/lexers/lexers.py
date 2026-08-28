@@ -99,7 +99,7 @@ class DTSLexer:
             else:
                 part_match = path_part_matcher.match(path, strpos)
                 if part_match is None:
-                    token, _ = token_from_string(ctx, TokenType.ERROR, '')
+                    token, _ = token_from_string(ctx, '', TokenType.ERROR)
                     yield token
                     return None
 
