@@ -1,5 +1,4 @@
-#!/usr/bin/env perl
-# t/060-lexers.t: run the lexers pytest suite (elixir/lexers/tests).
+# Port of t/060-lexers.t: run the lexers pytest suite (elixir/lexers/tests).
 #
 # This file is part of Elixir, a source code cross-referencer.
 #
@@ -18,25 +17,22 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-use 5.010_000;
-use strict;
-use warnings;
-use FindBin '$Bin';
-use lib $Bin;
+import subprocess
+import sys
+from pathlib import Path
 
-use Test::More;
+import pytest
 
-# The lexers come with a pytest suite. pytest is part of the Python
-# environment in the Docker image (requirements.txt); on a host without
-# it, skip rather than fail.
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
-my $have_pytest = system('python3', '-m', 'pytest', '--version') == 0;
 
-SKIP: {
-    skip 'python3 -m pytest not available', 1 unless $have_pytest;
-
-    chdir "$Bin/..";
-    my $rc = system('python3', '-m', 'pytest', 'elixir/lexers/tests', '-q');
-    is($rc, 0, 'lexers pytest suite passes');
-}
-done_testing();
+def test_lexers_suite():
+    # The suite is run as a subprocess, like the perl test did, so it
+    # cannot import pollution from this process (e.g. the LXR_* variables)
+    result = subprocess.run(
+        [sys.executable, '-m', 'pytest', '-q', 'elixir/lexers/tests'],
+        cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        universal_newlines=True)
+    if 'No module named pytest' in result.stdout:
+        pytest.skip('pytest not available')
+    assert result.returncode == 0, result.stdout

@@ -1,0 +1,17 @@
+/dts-v1/;
+
+#include "testproj-board.dtsi"
+
+/ {
+	model = "Testproj test board";
+	compatible = "vendor,testproj-board";
+
+	leds {
+		compatible = "gpio-leds";
+
+		led0: led-0 {
+			label = "status-led";
+			gpios = <&testgpio 5 0>;
+		};
+	};
+};

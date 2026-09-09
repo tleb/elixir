@@ -102,3 +102,8 @@ int i2c_register_board_info(int busnum, struct i2c_board_info const *info, unsig
 
 	return status;
 }
+
+static const struct of_device_id testproj_of_match[] = {
+	{ .compatible = "vendor,thing" },
+	{ }
+};

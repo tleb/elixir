@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Common devicetree bits for the Testproj test board
+ */
+
+/ {
+	testgpio: test-gpio {
+		compatible = "vendor,test-gpio";
+		#gpio-cells = <2>;
+	};
+
+	/* references the led node defined by the board dts */
+	statusled = &led0;
+};
