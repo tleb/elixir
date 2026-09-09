@@ -134,3 +134,132 @@ def parse_defs(blob, filename, family):
         return defs(blob, path)
     finally:
         shutil.rmtree(tmp)
+
+'''Port of find-file-doc-comments.pl (script.sh parse-docs): the
+b"ident line" lines the perl printed for the blob, associating
+kernel-doc "/** ... */" comments with the ctags definitions above
+them. Byte for byte, and in the same per-ident order; the perl's
+order ACROSS idents was its hash order, i.e. unspecified, and
+update.py stores per ident anyway.
+
+ctags stays a subprocess with the perl's own flags, different from
+parse_defs' (--c-kinds=+p-m --language-force=C): it builds
+line -> (name, type) maps, so one name can have several definitions
+(#186) instead of the name-keyed view db.defs has. The maps key on
+the line AS PRINTED, and are looked up with the counter
+stringified, so a ctags line number that is not a plain decimal just
+never matches - as in the perl.'''
+
+# Perl \h at byte level: the single-byte members of its horizontal
+# whitespace class, for patterns matched on non-decoded source lines
+_H = rb'[\t \xa0]'
+
+# A multiline macro: walk back to its #define
+_DOC_DEFINE = re.compile(rb'^' + _H + rb'*#' + _H + rb'*define')
+# A line a function's return type could start on (the "int\nfoo()"
+# walk-back)
+_DOC_STARTS_IDENT = re.compile(rb'^[a-z_]', re.IGNORECASE)
+# First line of a doc comment. Source lines keep their \n, and these
+# $'s, like perl's, also match just before it
+_DOC_OPENER = re.compile(rb'^' + _H + rb'*/\*\*(?:' + _H + rb'|$)')
+
+def _doc_comments(blob, path):
+    lines = _ctags_lines((b'--c-kinds=+p-m', b'--language-force=C'), path)
+    lines = [l for l in lines if not l.startswith(b'operator ')]
+    lines = _awk123(lines)
+
+    # Index definitions by line, not by name: multiple definitions can
+    # share a name (#186), and the last one ctags reported on a line
+    # wins
+    definition_lines = {}
+    definition_types = {}
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 3:
+            # The perl then keyed these maps with an undef, which
+            # warned - fatal, its $SIG{__WARN__} handler - so it died
+            raise ValueError('ctags line without a line number: '
+                             + repr(line))
+        definition_lines[fields[2]] = fields[0]
+        definition_types[fields[2]] = fields[1]
+
+    # Indices match ctags's 1-based linenos
+    source_lines = [None] + _shell_lines(blob)
+
+    doc_comments = {}
+
+    for lineno in range(len(source_lines) - 1, 0, -1):
+        key = b'%d' % lineno
+        if key not in definition_lines:
+            continue
+        definition_name = definition_lines[key]
+        definition_type = definition_types[key]
+
+        # Comment header: be liberal in what we accept. For example,
+        # do not check the type of the definition/declaration against
+        # the type in the comment header.
+        #   ^\h+\*\h+(?:(?:struct|enum|union|typedef)\h+)?NAME(?:\h|\(|:|$)
+        header_src = (_H + rb'+\*' + _H + rb'+(?:(?:struct|enum|union|typedef)'
+                      + _H + rb'+)?' + re.escape(definition_name)
+                      + rb'(?:' + _H + rb'|\(|:|$)')
+        header = re.compile(rb'^' + header_src)
+        skip = re.compile(rb'^(?:' + _H + rb'*$|' + _H + rb'+\*/|'
+                          + _H + rb'+\*(?:' + _H + rb'|$)|'
+                          + header_src + rb')')
+
+        # Make sure we get back past the first line of multiline
+        # definitions
+        if definition_type == b'macro':
+            while lineno and not _DOC_DEFINE.match(source_lines[lineno]):
+                lineno -= 1
+        elif definition_type == b'function':
+            # Try to handle the case of "int\nfoo()"
+            if re.match(rb'^' + _H + rb'*' + re.escape(definition_name)
+                        + rb'\b', source_lines[lineno]):
+                while lineno and _DOC_STARTS_IDENT.match(source_lines[lineno]):
+                    lineno -= 1
+
+        # Move to the first line that might be a doc comment
+        lineno -= 1
+        if lineno <= 0:
+            continue
+
+        # Find the last line that could be a doc-comment header for
+        # this function
+        while lineno and skip.match(source_lines[lineno]):
+            lineno -= 1
+        lineno += 1  # We may have just skipped past the header itself
+
+        # Is it actually a header for this function?
+        if not header.match(source_lines[lineno]):
+            continue
+
+        # We have found a header. Confirm it's a doc comment.
+        lineno -= 1
+        if not (lineno > 0 and _DOC_OPENER.match(source_lines[lineno])):
+            continue
+
+        # We have found a doc comment for this function! The lines are
+        # pushed while walking the file backwards, so for one name they
+        # come out in descending order of definition line
+        doc_comments.setdefault(definition_name, []).append(lineno)
+
+    out = []
+    for name, linenos in doc_comments.items():
+        out += [name + b' ' + b'%d' % lineno for lineno in linenos]
+    return out
+
+def parse_doc_comments(blob):
+    '''The b"ident line" lines find-file-doc-comments.pl printed for
+    the blob: same bytes. The ident is the documented definition's
+    name, the line the /** opener's line. One ctags subprocess, run on
+    a temp copy of the blob as the perl was (through script.sh's
+    mktemp); --language-force=C made the temp name irrelevant, so any
+    mkstemp file serves'''
+    fd, path = tempfile.mkstemp()
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(blob)
+        return _doc_comments(blob, os.fsencode(path))
+    finally:
+        os.unlink(path)
