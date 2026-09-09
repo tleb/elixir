@@ -180,8 +180,8 @@ def update_definitions(idxs):
         family = lib.getFileFamily(filename)
         if family in [None, 'M']: continue
 
-        # script.sh parse-defs, ported: one ctags subprocess, the
-        # blob fetched through the batch reader
+        # One ctags subprocess (parse.parse_defs), the blob fetched
+        # through the batch reader
         lines = parse.parse_defs(repo.get_blob(hash), filename, family)
 
         for l in lines:
@@ -306,8 +306,8 @@ def update_doc_comments(idxs):
         family = lib.getFileFamily(filename)
         if family in [None, 'M']: continue
 
-        # script.sh parse-docs, ported: the perl ran on a temp copy of
-        # the blob, fetched here through the batch reader
+        # Doc comments for the whole blob (parse.parse_doc_comments),
+        # fetched through the batch reader
         lines = parse.parse_doc_comments(repo.get_blob(hash))
         for l in lines:
             ident, line = l.split(b' ')
@@ -447,8 +447,7 @@ def index_tag(tag):
     bindings_idxes.clear()
     defs_idxes.clear()
 
-    # One walk over the tag's blobs feeds both phases below (script.sh
-    # listed them twice, as list-blobs -f and list-blobs -p)
+    # One walk over the tag's blobs feeds every phase below
     blobs = repo.list_blobs(lib.getRepoDir(), tag)
 
     # Phase 1: assign idx numbers to the tag's new blobs

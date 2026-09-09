@@ -3,6 +3,12 @@
 # project under t/goldens/, from the tags-only repos under the Elixir data
 # directory (default: ../elixir-data relative to this repository).
 #
+# NOTE: script.sh is gone (its commands were ported to elixir/repo.py),
+# so this script can no longer run. The captured goldens are FROZEN
+# records of the shell behavior: t/test_goldens.py pins repo.py against
+# them forever. For capturing goldens for new projects, commit ecc413d
+# (the last before script.sh was deleted) has the working capture code.
+#
 # These are the regression goldens of the Python port: t/test_goldens.py
 # asserts that elixir/repo.py (TAG_PIPELINES and the get-type port)
 # reproduces them byte for byte. The port is C-locale (bytes), matching

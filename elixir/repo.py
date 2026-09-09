@@ -67,7 +67,7 @@ def git(repo_dir, *args):
 
 
 def git_lines(repo_dir, *args):
-    '''git() output split into lines, like lib.scriptLines'''
+    '''git() output split into lines, like scriptLines'''
     lines = git(repo_dir, *args).split(b'\n')
     del lines[-1]
     return lines
@@ -661,7 +661,7 @@ def get_blob(hash):
     return data
 
 def get_blob_lines(hash):
-    '''get_blob() split into lines with lib.scriptLines semantics:
+    '''get_blob() split into lines with scriptLines semantics:
     split(b'\\n') with the last element dropped, so a blob not ending
     in a newline loses its final (partial) line, as it always has'''
     lines = get_blob(hash).split(b'\n')

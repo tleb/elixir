@@ -188,7 +188,7 @@ def test_tag_pipelines_dispatch(monkeypatch):
 
 
 def test_get_blob_lines_scriptlines_semantics(monkeypatch):
-    '''Exactly lib.scriptLines semantics: split(b'\\n') minus the last
+    '''Exactly scriptLines semantics: split(b'\\n') minus the last
     element, even when that drops a final partial line'''
     cases = [
         (b'', []),

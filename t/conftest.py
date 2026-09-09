@@ -34,7 +34,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-PROJECT = 'testproj'  # script.sh derives the project from the data dir's parent
+PROJECT = 'testproj'  # lib.currentProject() derives the project from the data dir's parent
 TAG = 'v5.4'
 TREE = Path(__file__).resolve().parent / 'tree'
 
