@@ -31,19 +31,6 @@ Universal Ctags, Apache) are bundled in the Docker image.
 Running the test suite on a host has additional requirements, see the
 _Automated testing_ section.
 
-= Architecture
-
-The shell script (`script.sh`) is the lower layer and provides commands
-to interact with Git and other Unix utilities. The Python commands use
-the shell script's services to provide access to the annotated source
-code and identifier lists (`query.py`) or to create and update the
-databases (`update.py`). Finally, the web interface (`web.py`) and
-uses the query interface to generate HTML pages and to answer REST
-queries, respectively.
-
-When installing the system, you should test each layer manually and make
-sure it works correctly before moving on to the next one.
-
 = Installation and deployment (Docker)
 
 The container image is used for both serving the web pages and indexing:
@@ -123,14 +110,8 @@ http://localhost/musl/latest/source
 
 == Verifying the installation
 
-The individual layers can be checked from inside the container.
-`script.sh` and `utils.query` need to know which project to work on,
+`utils.query` needs to know which project to work on,
 through the `LXR_REPO_DIR` and `LXR_DATA_DIR` environment variables:
-
- # docker exec \
-    -e LXR_REPO_DIR=/srv/elixir-data/musl/repo \
-    -e LXR_DATA_DIR=/srv/elixir-data/musl/data \
-    elixir-container ./script.sh list-tags
 
  # docker exec \
     -e LXR_REPO_DIR=/srv/elixir-data/musl/repo \
@@ -140,7 +121,7 @@ through the `LXR_REPO_DIR` and `LXR_DATA_DIR` environment variables:
 NOTE: `latest` can be replaced with any other tag, and `malloc` with any
 other identifier.
 
-Finally, check the web pages and the REST API (see below) served by
+You can also check the web pages and the REST API (see below) served by
 the container.
 
 == Automatic repository updates
@@ -210,93 +191,6 @@ and 2 GB for the git repository.
 running at 3.1 GHz.
 
 = Contributing to Elixir
-
-== Supporting a new project
-
-Elixir has a very simple modular architecture that allows to support
-new source code projects by just adding a new file to the Elixir sources.
-
-Elixir's assumptions:
-
-* Project sources have to be available in a git repository
-* All project releases are associated to a given git tag. Elixir
-only considers such tags.
-
-First make an installation of Elixir by following the above instructions
-and index at least one project, to make sure it works.
-See the `projects` subdirectory for projects that are already supported.
-
-Supporting a new project requires changes in two places:
-
-. Declare the project's git remotes: add an `add_default_remotes` line at the
-end of `utils/index`, giving the project name and its remote URL(s):
-+
-----
-add_default_remotes $1 $# $2 zephyr https://github.com/zephyrproject-rtos/zephyr
-----
-+
-The project name *must* match the name of the file created below.
-
-. Describe the project's tags: create a `projects/<projectname>.sh` file
-(for example `projects/zephyr.sh`).
-
-Depending on how you want to show the available versions on the Elixir pages,
-you may have to apply substitutions to each tag string, for example to add
-a `v` prefix if missing, for consistency with how other project versions are
-shown. You may also decide to ignore specific tags. All this can be done
-by redefining the default `list_tags()` function. Here's an example
-(`projects/zephyr.sh` file):
-
- list_tags()
- {
-     echo "$tags" |
-         grep -v '^zephyr-v'
- }
-
-The next step is to make sure that versions are classified as you wish
-in the version menu. This classification work is done through the
-`list_tags_h()` function which generates the output of the `./script.sh list-tags -h`
-command. Here's what you get for the Linux project:
-
- v4 v4.16 v4.16
- v4 v4.16 v4.16-rc7
- v4 v4.16 v4.16-rc6
- v4 v4.16 v4.16-rc5
- v4 v4.16 v4.16-rc4
- v4 v4.16 v4.16-rc3
- v4 v4.16 v4.16-rc2
- v4 v4.16 v4.16-rc1
- ...
-
-The first column is the top level menu entry for versions.
-The second one is the next level menu entry, and
-the third one is the actual version that can be selected by the menu.
-Note that this third entry must correspond to the exact
-name of the tag in git.
-
-If the default behavior is not what you want, you will have
-to customize the `list_tags_h` function.
-
-You should also make sure that Elixir properly identifies
-the most recent versions:
-
- # docker exec \
-    -e LXR_REPO_DIR=/srv/elixir-data/zephyr/repo \
-    -e LXR_DATA_DIR=/srv/elixir-data/zephyr/data \
-    elixir-container ./script.sh get-latest-tags | head
-
-If needed, customize the `get_latest_tags()` function.
-
-If you want to enable support for `compatible` properties in Devicetree files,
-add `dts_comp_support=1` at the beginning of `projects/<projectname>.sh`.
-
-You are now ready to index the new project. Rebuild the Docker image
-(as `utils/index` and `projects/` are copied into it), then run:
-
- # docker exec -it elixir-container index /srv/elixir-data zephyr
-
-You can then check that Elixir works through the web pages served by the
-container.
 
 == Coding style
 
