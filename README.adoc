@@ -318,16 +318,16 @@ The test suite and all its dependencies are part of the Docker image, so you
 can run it without installing anything else on the host (assuming the image
 was built as shown earlier):
 
- # docker run --rm --entrypoint prove elixir
+ # docker run --rm --entrypoint pytest elixir t/
 
 == On the host
 
-Running the suite on a host requires: Perl, Git, Python >= 3.8 with the
+Running the suite on a host requires: Git, Python >= 3.8 with the
 packages listed in `requirements.txt` (including `berkeleydb`, which needs
 the Berkeley DB development files to build), and Universal Ctags.
 From the top-level Elixir directory, run:
 
- prove
+ python3 -m pytest t/
 
 The test suite uses code extracted from Linux v5.4 in `t/tree`.
 
