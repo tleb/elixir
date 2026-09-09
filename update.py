@@ -58,6 +58,7 @@ from threading import Lock
 
 from elixir.lexers import TokenType
 from elixir import repo
+from elixir import parse
 import elixir.lib as lib
 from elixir.lib import scriptLines
 import elixir.data as data
@@ -180,7 +181,9 @@ def update_definitions(idxs):
         family = lib.getFileFamily(filename)
         if family in [None, 'M']: continue
 
-        lines = scriptLines('parse-defs', hash, filename, family)
+        # script.sh parse-defs, ported: one ctags subprocess, the
+        # blob fetched through the batch reader
+        lines = parse.parse_defs(repo.get_blob(hash), filename, family)
 
         for l in lines:
             ident, type, line = l.split(b' ')
