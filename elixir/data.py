@@ -27,6 +27,7 @@ import errno
 
 deflist_regex = re.compile(rb'(\d*)(\w)(\d*)(\w),?')
 deflist_macro_regex = re.compile(r'\dM\d+(\w)')
+deflist_id_regex = re.compile(rb'\d+')
 
 ##################################################################################
 
@@ -76,9 +77,21 @@ class DefList:
         if type not in defTypeD:
             return
         p = str(id) + defTypeD[type] + str(line) + family
-        if self.data != b'':
-            p = ',' + p
-        self.data += p.encode()
+        # Insert at the canonical position instead of concatenating:
+        # blobs defining a shared ident are indexed by parallel
+        # threads, so arrival order follows thread scheduling. Sorted
+        # insertion by blob ID, stable for equal IDs (the sort key of
+        # iter()), makes the record bytes depend only on the set of
+        # definitions. One blob belongs to exactly one work unit, so
+        # equal-ID entries keep their call order.
+        entries = self.data.split(b',') if self.data else []
+        pos = len(entries)
+        for i, entry in enumerate(entries):
+            if int(deflist_id_regex.match(entry).group()) > id:
+                pos = i
+                break
+        entries.insert(pos, p.encode())
+        self.data = b','.join(entries)
         self.add_family(family)
 
     def pack(self):
@@ -138,8 +151,19 @@ class RefList:
             yield maxId, None, None
 
     def append(self, id, lines, family):
-        p = str(id) + ':' + lines + ':' + family + '\n'
-        self.data += p.encode()
+        p = (str(id) + ':' + lines + ':' + family).encode()
+        # Canonical insertion as in DefList.append: docs, comps and
+        # comps_docs appends for a shared ident arrive from parallel
+        # threads, and one blob can append several entries (one per
+        # line) which must keep their call order.
+        entries = self.data.split(b'\n')[:-1]
+        pos = len(entries)
+        for i, entry in enumerate(entries):
+            if int(entry.split(b':', 1)[0]) > id:
+                pos = i
+                break
+        entries.insert(pos, p)
+        self.data = b'\n'.join(entries) + b'\n'
 
     def pack(self):
         return self.data
