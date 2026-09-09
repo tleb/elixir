@@ -51,21 +51,23 @@
 
 import multiprocessing
 import os
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from sys import argv
-from threading import Lock, local
+from threading import Lock
 
 from elixir.lexers import TokenType
+from elixir import repo
 import elixir.lib as lib
-from elixir.lib import script, scriptLines
+from elixir.lib import scriptLines
 import elixir.data as data
 from elixir.data import PathList
 from elixir.project_utils import get_lexer
 from find_compatible_dts import FindCompatibleDTS
 
-dts_comp_support = int(script('dts-comp'))
+project = lib.currentProject()
+
+dts_comp_support = int(project in repo.DTS_COMP_SUPPORT)
 
 compatibles_parser = FindCompatibleDTS()
 
@@ -88,33 +90,6 @@ docs_lock = Lock() # db.docs
 refs_lock = Lock() # db.refs
 comps_lock = Lock() # db.comps
 comps_docs_lock = Lock() # db.comps_docs
-
-
-_batch_tls = local()
-
-def get_blob_batch(hash):
-    '''Blob content from a persistent per-thread `git cat-file --batch`.
-
-    Same bytes as script('get-blob', hash) without one fork+exec of
-    script.sh and git per blob. Responses arrive in request order; one
-    process per thread needs no locking.
-    '''
-    p = getattr(_batch_tls, 'batch', None)
-    if p is None or p.poll() is not None:
-        p = subprocess.Popen(['git', 'cat-file', '--batch'],
-                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             cwd=lib.getRepoDir())
-        _batch_tls.batch = p
-
-    p.stdin.write(hash + b'\n')
-    p.stdin.flush()
-
-    header = p.stdout.readline().split()
-    assert header[1] == b'blob', header
-    size = int(header[2])
-    data = p.stdout.read(size)
-    p.stdout.read(1) # newline after the payload
-    return data
 
 
 executor = None # Created on first use; its threads live for the whole run
@@ -144,18 +119,14 @@ def progress(msg):
     print(project + ' - ' + msg, flush=True)
 
 
-def update_blob_ids(tag):
+def update_blob_ids(blobs):
     if db.vars.exists('numBlobs'):
         idx = db.vars.get('numBlobs')
     else:
         idx = 0
 
-    # Get blob hashes and associated file names (without path)
-    blobs = scriptLines('list-blobs', '-f', tag)
-
     new_idxes = []
-    for blob in blobs:
-        hash, filename = blob.split(b' ',maxsplit=1)
+    for hash, filename, path in blobs:
         if not db.blob.exists(hash):
             db.blob.put(hash, idx)
             db.hash.put(idx, hash)
@@ -167,16 +138,13 @@ def update_blob_ids(tag):
     return new_idxes
 
 
-def update_versions(tag):
+def update_versions(blobs):
     '''Collect the tag's blob paths into a PathList; the caller
     commits it to db.vers once every phase of the tag has run, so a
     tag listed in db.vers is fully indexed.'''
-    # Get blob hashes and associated file paths
-    blobs = scriptLines('list-blobs', '-p', tag)
     buf = []
 
-    for blob in blobs:
-        hash, path = blob.split(b' ', maxsplit=1)
+    for hash, filename, path in blobs:
         idx = db.blob.get(hash)
         buf.append((idx, path))
         file_paths[idx] = path
@@ -253,9 +221,9 @@ def _refs_lex_chunk(triples):
             continue
 
         try:
-            code = get_blob_batch(hash).decode()
+            code = repo.get_blob(hash).decode()
         except UnicodeDecodeError:
-            code = get_blob_batch(hash).decode('raw_unicode_escape')
+            code = repo.get_blob(hash).decode('raw_unicode_escape')
 
         prefix = b''
         # Kconfig values are saved as CONFIG_<value>
@@ -361,7 +329,7 @@ def update_compatibles(idxs):
         family = lib.getFileFamily(filename)
         if family in [None, 'K', 'M']: continue
 
-        lines = compatibles_parser.run(scriptLines('get-blob', hash), family)
+        lines = compatibles_parser.run(repo.get_blob_lines(hash), family)
         comps = {}
         for l in lines:
             ident, line = l.split(' ')
@@ -392,7 +360,7 @@ def update_compatibles_bindings(idxs):
         hash = db.hash.get(idx)
 
         family = 'B'
-        lines = compatibles_parser.run(scriptLines('get-blob', hash), family)
+        lines = compatibles_parser.run(repo.get_blob_lines(hash), family)
         comps_docs = {}
         for l in lines:
             ident, line = l.split(' ')
@@ -429,10 +397,8 @@ def current_tag():
 if len(argv) >= 2 and argv[1].isdigit():
     num_threads = max(1, int(argv[1]))
 
-project = lib.currentProject()
-
 tag_buf = []
-for tag in scriptLines('list-tags'):
+for tag in repo.list_tags(lib.getRepoDir(), project):
     if not db.vers.exists(tag):
         tag_buf.append(tag)
 
@@ -477,12 +443,16 @@ def index_tag(tag):
     bindings_idxes.clear()
     defs_idxes.clear()
 
+    # One walk over the tag's blobs feeds both phases below (script.sh
+    # listed them twice, as list-blobs -f and list-blobs -p)
+    blobs = repo.list_blobs(lib.getRepoDir(), tag)
+
     # Phase 1: assign idx numbers to the tag's new blobs
-    idxes = update_blob_ids(tag)
+    idxes = update_blob_ids(blobs)
     progress('ids: ' + tag.decode() + ': ' + str(len(idxes)) + ' new blobs')
 
     # Phase 2: versions - collect the paths, commit after phase 5
-    vers_obj = update_versions(tag)
+    vers_obj = update_versions(blobs)
 
     # From here on the phases write defs, docs, comps and refs, which
     # cannot be rolled back: mark the tag as in-flight so that a run
