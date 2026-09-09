@@ -27,25 +27,11 @@ logger = logging.getLogger(__name__)
 
 CURRENT_DIR = os.path.abspath(os.path.dirname(os.path.abspath(__file__)) + '/../')
 
-def script(*args, env=None):
-    args = (os.path.join(CURRENT_DIR, 'script.sh'),) + args
-    p = subprocess.run(args, stdout=subprocess.PIPE, env=env)
-    return p.stdout
-
 def run_cmd(*args, env=None):
     p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     if len(p.stderr) != 0:
         logger.error('command %s printed to stderr: \n%s', str(args), p.stderr.decode('utf-8'))
     return p.stdout, p.returncode
-
-# Invoke ./script.sh with the given arguments
-# Returns the list of output lines
-
-def scriptLines(*args, env=None):
-    p = script(*args, env=env)
-    p = p.split(b'\n')
-    del p[-1]
-    return p
 
 tokenize_regex_D = re.compile(rb'''((/\*.*?\*/|//.*?\001|[^']"(\\.|.)*?"|# *include *<.*?>|[^\w-])+)([\w-]+)?''')
 tokenize_regex = re.compile(rb'''((/\*.*?\*/|//.*?\001|[^']"(\\.|.)*?"|# *include *<.*?>|\W)+)(\w+)?''')

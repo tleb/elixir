@@ -28,7 +28,6 @@ RUN \
     python3-pip \
     python3-venv \
     libdb5.3 \
-    perl \
     git \
     apache2 \
     libapache2-mod-wsgi-py3 \
