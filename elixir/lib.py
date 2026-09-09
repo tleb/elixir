@@ -61,8 +61,11 @@ def tokenize(data, family):
         yield m.group(4) or b''
         pos = m.end()
 
-def tokenizeFile(ver, file, family, env=None):
-    data = script('get-file', ver, file, env=env).replace(b'\n', b'\001')
+def tokenizeFile(repo_dir, project, ver, file, family):
+    '''Tokens of the file <ver>:<file> of the repository, alternating
+    separators and words (what script.sh get-file fed the tokenizer)'''
+    from . import repo # deferred: repo imports this module
+    data = repo.get_file(repo_dir, project, ver, file).replace(b'\n', b'\001')
     yield from tokenize(data, family)
 
 def unescape(bstr):

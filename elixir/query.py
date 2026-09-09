@@ -18,8 +18,9 @@
 #  You should have received a copy of the GNU Affero General Public License
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
-from .lib import script, scriptLines, decode, tokenizeFile
+from .lib import decode, tokenizeFile
 from . import lib
+from . import repo
 from . import data
 import os
 from collections import OrderedDict
@@ -59,22 +60,12 @@ class Query:
     def __init__(self, data_dir, repo_dir):
         self.repo_dir = repo_dir
         self.data_dir = data_dir
-        self.dts_comp_support = int(self.script('dts-comp'))
+        # script.sh picked the project's plugin the same way, from the
+        # repository directory's parent
+        self.project = os.path.basename(os.path.dirname(repo_dir))
+        self.dts_comp_support = int(self.project in repo.DTS_COMP_SUPPORT)
         self.db = data.DB(data_dir, readonly=True, dtscomp=self.dts_comp_support)
         self.file_cache = {}
-
-    def script(self, *args):
-        return script(*args, env=self.getEnv())
-
-    def scriptLines(self, *args):
-        return scriptLines(*args, env=self.getEnv())
-
-    def getEnv(self):
-        return {
-            **os.environ,
-            "LXR_REPO_DIR": self.repo_dir,
-            "LXR_DATA_DIR": self.data_dir,
-        }
 
     def close(self):
         self.db.close()
@@ -113,7 +104,7 @@ class Query:
             assert family in lib.CACHED_DEFINITIONS_FAMILIES, f"family {family} must have its definitions cached"
 
             buffer = BytesIO()
-            tokens = tokenizeFile(version, path, family, env=self.getEnv())
+            tokens = tokenizeFile(self.repo_dir, self.project, version, path, family)
             even = True
 
             prefix = b''
@@ -130,12 +121,12 @@ class Query:
                 buffer.write(tok)
             return decode(buffer.getvalue())
         else:
-            return decode(self.script('get-file', version, path))
+            return decode(repo.get_file(self.repo_dir, self.project, version, path))
 
     # Returns the contents (trees or blobs) of the specified directory
     # Example: v3.1-rc10 /arch
     def get_dir_contents(self, version, path):
-        entries_str =  decode(self.script('get-dir', version, path))
+        entries_str = decode(repo.get_dir(self.repo_dir, self.project, version, path))
         return entries_str.split("\n")[:-1]
 
     # Returns indexed versions, as a tree of OrderedDict.
@@ -143,7 +134,7 @@ class Query:
     def get_versions(self):
         versions = OrderedDict()
 
-        for line in self.scriptLines('list-tags', '-h'):
+        for line in repo.list_tags_h(self.repo_dir, self.project):
             taginfo = decode(line).split(' ')
             num = len(taginfo)
             topmenu, submenu = 'FIXME', 'FIXME'
@@ -173,7 +164,7 @@ class Query:
     # > ./query.py type v3.1-rc10 /arch
     # tree
     def get_file_type(self, version, path):
-        return decode(self.script('get-type', version, path)).strip()
+        return decode(repo.get_type(self.repo_dir, self.project, version, path)).strip()
 
     # Returns identifier search results
     def search_ident(self, version, ident, family):
@@ -187,9 +178,9 @@ class Query:
     # This excludes release candidates if `rc` is False.
     def get_latest_tag(self, rc):
         if rc:
-            sorted_tags = list(reversed(self.scriptLines('list-tags')))
+            sorted_tags = list(reversed(repo.list_tags(self.repo_dir, self.project)))
         else:
-            sorted_tags = self.scriptLines('get-latest-tags')
+            sorted_tags = repo.latest_tags(self.repo_dir, self.project)
 
         for tag in sorted_tags:
             if self.db.vers.exists(tag):
@@ -199,7 +190,7 @@ class Query:
         return sorted_tags[-1].decode()
 
     def get_file_raw(self, version, path):
-        return decode(self.script('get-file', version, path))
+        return decode(repo.get_file(self.repo_dir, self.project, version, path))
 
     def get_idents_comps(self, version, ident):
 
