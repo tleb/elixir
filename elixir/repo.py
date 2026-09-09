@@ -19,17 +19,23 @@
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
 '''Git plumbing, replacing the git subprocesses and shell text
-processing (sed/sort/awk pipelines) that script.sh ran for update.py.
+processing (sed/sort/awk pipelines) that script.sh ran for update.py
+and query.py.
 
 Everything here works on bytes: tags, paths and blobs are byte
 strings, exactly what git prints and what the databases store.
 
 The version comparator is a faithful port of GNU sort's -V comparison
 (gnulib's filevercmp.c); it is pinned against the real sort -V in
-t/test_repo.py, over every clone's tag list.'''
+t/test_repo.py, over every clone's tag list. The per-project tag
+pipelines (TAG_PIPELINES, the projects/*.sh plugins) are pinned
+against script.sh's own output in t/test_goldens.py.'''
 
 import functools
+import os
+import re
 import subprocess
+from dataclasses import dataclass
 from threading import local
 
 from elixir.lib import getRepoDir
@@ -45,11 +51,12 @@ DTS_COMP_SUPPORT = frozenset((
     'testproj', # pytest tree project (projects/testproj.sh)
 ))
 
-# Tag pipelines: project name -> function(tags) -> ordered tags, where
-# tags is `git tag` output as a bytes list. Projects without an entry
-# use the default sort -V pipeline. Populated by project-specific
-# ports (linux etc.); only the default exists so far.
-TAG_PIPELINES = {}
+# Tag pipelines: the ports of the projects/<project>.sh plugins,
+# below, one TagConfig per project that overrides anything. musl,
+# uclibc-ng, vpp, iproute2 and opensbi define nothing and have no
+# entry; testproj only sets dts_comp_support, which lives in
+# DTS_COMP_SUPPORT above. t/test_goldens.py pins every entry against
+# script.sh's output.
 
 
 def git(repo_dir, *args):
@@ -212,13 +219,399 @@ def default_tag_pipeline(tags):
     pairs.sort(key=functools.cmp_to_key(lambda x, y: versioncmp(x[0], y[0])))
     return [tag for _, tag in pairs]
 
+# Shell text-processing primitives, for the pipelines below. Each
+# behaves exactly like the command it replaces on bytes.
+
+def _tac(lines):
+    return lines[::-1]
+
+def _grep(pattern, lines):
+    rx = re.compile(pattern)
+    return [line for line in lines if rx.search(line)]
+
+def _grep_v(pattern, lines):
+    rx = re.compile(pattern)
+    return [line for line in lines if not rx.search(line)]
+
+def _sed(pattern, repl, lines):
+    '''One s/pattern/repl/ per line, like sed without the g flag;
+    non-matching lines pass through unchanged. repl is a sed-style
+    replacement (b'\\1' backreferences) or a match -> bytes function
+    (for GNU sed's \\\'60'-style references, which re rejects)'''
+    rx = re.compile(pattern)
+    return [rx.sub(repl, line, count=1) for line in lines]
+
+def _sort_vr(lines):
+    '''sort -Vr: sort -V order reversed (newest first)'''
+    return list(reversed(version_sort(lines)))
+
+
+def _cat(lines):
+    '''script.sh's default version_dir()/version_rev()/list_tags():
+    cat (and `echo "$tags"`); identity on one line or a list'''
+    return lines
+
+# script.sh list_tags_h:
+#   echo "$tags" | tac | sed -r 's/^(v[0-9]*)\.([0-9]*)(.*)$/\1 \1.\2 \1.\2\3/'
+def default_list_tags_h(tags):
+    return _sed(rb'^(v[0-9]*)\.([0-9]*)(.*)$', rb'\1 \1.\2 \1.\2\3',
+                _tac(tags))
+
+
+@dataclass(frozen=True)
+class TagConfig:
+    '''The tag functions one projects/<project>.sh plugin overrides;
+    every field is the shell function of the same name, ported. None
+    means script.sh's default, which is not always a plain function:
+    the default get_tags and get_latest_tags compose version_dir, so
+    they are resolved at call time instead.'''
+    version_dir: callable = _cat   # tag names -> display versions
+    version_rev: callable = _cat   # display version -> tag name
+    get_tags: callable = None      # full pipeline: `git tag` -> ordered
+    list_tags: callable = _cat     # filter over get_tags output
+    list_tags_h: callable = default_list_tags_h
+    latest_tags: callable = None   # full pipeline: `git tag` -> newest first
+
+
+# ---- Ports of the projects/<project>.sh plugins ----
+# One function per shell function, one Python line per pipeline
+# stage, with the original above it. GNU sed's .*? is plain greedy
+# (the ? is inert), so the ports use .*; and BRE's [\.] bracket
+# matches backslash or dot, hence [\\.] — no real tag has a backslash.
+
+# busybox.sh:
+#   version_dir() { tr '_.' '._'; }   version_rev() { tr '._' '_.'; }
+_BUSYBOX_TO_DISPLAY = bytes.maketrans(b'_.', b'._')
+_BUSYBOX_TO_TAG = bytes.maketrans(b'._', b'_.')
+
+def busybox_version_dir(tags):
+    return [tag.translate(_BUSYBOX_TO_DISPLAY) for tag in tags]
+
+def busybox_version_rev(v):
+    return v.translate(_BUSYBOX_TO_TAG)
+
+# busybox.sh list_tags_h:
+#   tac | sed -r 's/^([0-9]*)\.([0-9]*)(.*)$/v\1 \1.\2 \1.\2\3/'
+def busybox_list_tags_h(tags):
+    return _sed(rb'^([0-9]*)\.([0-9]*)(.*)$', rb'v\1 \1.\2 \1.\2\3',
+                _tac(tags))
+
+# coreboot.sh / ofono.sh list_tags_h (same but with a v on the second
+# column, unlike busybox's):
+#   tac | sed -r 's/^([0-9]*)\.([0-9]*)(.*)$/v\1 v\1.\2 \1.\2\3/'
+def _num_tags_h(tags):
+    return _sed(rb'^([0-9]*)\.([0-9]*)(.*)$', rb'v\1 v\1.\2 \1.\2\3',
+                _tac(tags))
+
+# freebsd.sh:
+#   version_dir() { grep "^release/[0-9]*\.[0-9]*\.[0-9]*$" |
+#                   sed -e 's,^release/,v,' -e 's,\.0$,,'; }
+#   version_rev() { grep "^v" |
+#                   sed -e 's,v[0-9]*\.[0-9]*$,&\.0,' -e 's,^v,release/,'; }
+def freebsd_version_dir(tags):
+    tags = _grep(rb'^release/[0-9]*\.[0-9]*\.[0-9]*$', tags)
+    tags = _sed(rb'^release/', b'v', tags)
+    return _sed(rb'\.0$', b'', tags)
+
+def freebsd_version_rev(v):
+    if not v.startswith(b'v'): # grep dropped the line: empty output
+        return b''
+    v = _sed(rb'v[0-9]*\.[0-9]*$', lambda m: m.group(0) + b'.0', [v])[0]
+    return _sed(rb'^v', b'release/', [v])[0]
+
+# xen.sh:
+#   version_dir() { grep "^RELEASE" | sed 's/^RELEASE-/v/'; }
+#   version_rev() { grep "^v" | sed 's/^v/RELEASE-/'; }
+def xen_version_dir(tags):
+    return _sed(rb'^RELEASE-', b'v', _grep(rb'^RELEASE', tags))
+
+def xen_version_rev(v):
+    if not v.startswith(b'v'): # grep dropped the line: empty output
+        return b''
+    return _sed(rb'^v', b'RELEASE-', [v])[0]
+
+# amazon-freertos.sh list_tags_h (YYYYMM tags first, then v tags) and
+# get_latest_tags:
+#   grep -v '^v' | tac | sed -r 's/^(\d\d\d\d)(\d\d)(.*)$/\1 \1\2 \1\2\3/'
+#   grep '^v' | tac | <the default sed>
+#   git tag | grep '^20' | sort -Vr
+def amazon_freertos_list_tags_h(tags):
+    b1 = _sed(rb'^([0-9][0-9][0-9][0-9])([0-9][0-9])(.*)$',
+              rb'\1 \1\2 \1\2\3', _tac(_grep_v(rb'^v', tags)))
+    return b1 + default_list_tags_h(_grep(rb'^v', tags))
+
+def amazon_freertos_latest_tags(raw):
+    return _sort_vr(_grep(rb'^20', raw))
+
+# arm-trusted-firmware.sh list_tags_h:
+#   grep -v 'for-v0\.4' | tac | <the default sed>
+#   grep 'for-v0\.4' | tac | sed -r 's/^/custom for-v0.4 /'
+def atf_list_tags_h(tags):
+    b1 = default_list_tags_h(_grep_v(rb'for-v0\.4', tags))
+    b2 = _sed(rb'^', b'custom for-v0.4 ', _tac(_grep(rb'for-v0\.4', tags)))
+    return b1 + b2
+
+# barebox.sh list_tags_h, three blocks:
+#   grep '^v20' | tac | sed -r 's/^(v20..)\.([0-9][0-9])\.(.*)$/\1 \1.\2 \1.\2.\3/'
+#   grep '^v2\.0' | tac | sed -r 's/^(v2\.0)(.*)$/old \1 \1\2/'
+#   grep '^freescale' | tac | sed -r 's/^(freescale)(.*)$/old \1 \1\2/'
+def barebox_list_tags_h(tags):
+    b1 = _sed(rb'^(v20..)\.([0-9][0-9])\.(.*)$', rb'\1 \1.\2 \1.\2.\3',
+              _tac(_grep(rb'^v20', tags)))
+    b2 = _sed(rb'^(v2\.0)(.*)$', rb'old \1 \1\2',
+              _tac(_grep(rb'^v2\.0', tags)))
+    b3 = _sed(rb'^(freescale)(.*)$', rb'old \1 \1\2',
+              _tac(_grep(rb'^freescale', tags)))
+    return b1 + b2 + b3
+
+# bluez.sh list_tags/list_tags_h/get_latest_tags:
+#   grep '^[0-9]'
+#   grep '^[0-9]' | sort -rV | sed -E 's/^([0-9]*)\.([0-9]*)$/v\1 v\1.\2 \1.\2/'
+#   git tag | grep '^[0-9]\.' | sort -Vr
+def bluez_list_tags(tags):
+    return _grep(rb'^[0-9]', tags)
+
+def bluez_list_tags_h(tags):
+    return _sed(rb'^([0-9]*)\.([0-9]*)$', rb'v\1 v\1.\2 \1.\2',
+                _sort_vr(_grep(rb'^[0-9]', tags)))
+
+def bluez_latest_tags(raw):
+    return _sort_vr(_grep(rb'^[0-9]\.', raw))
+
+# dpdk.sh list_tags_h, two blocks:
+#   grep -vE '^v1\.|^v2\.' | tac | sed -r 's/^v([0-9]*)\.([0-9]*)(.*)$/v\1 v\1.\2 v\1.\2\3/'
+#   grep -E '^v1\.|^v2\.' | tac | sed -r 's/^v(1|2)\.([0-9])(.*)$/old v\1.\2 v\1.\2\3/'
+def dpdk_list_tags_h(tags):
+    b1 = _sed(rb'^v([0-9]*)\.([0-9]*)(.*)$', rb'v\1 v\1.\2 v\1.\2\3',
+              _tac(_grep_v(rb'^v1\.|^v2\.', tags)))
+    b2 = _sed(rb'^v(1|2)\.([0-9])(.*)$', rb'old v\1.\2 v\1.\2\3',
+              _tac(_grep(rb'^v1\.|^v2\.', tags)))
+    return b1 + b2
+
+# glibc.sh list_tags/list_tags_h:
+#   grep -v 'cvs'
+#   grep "glibc" | grep -v "fedora" | grep -v "cvs" | tac |
+#     sed -r 's/^glibc-([0-9]*)(\.[0-9]*)(.*)$/v\1 v\1\2 glibc-\1\2\3/'
+#   grep -v "cvs" | grep "fedora" | tac |
+#     sed -r 's/^fedora\/glibc-([0-9]*)(\.[0-9]*)(.*)$/fedora v\1\2 fedora\/glibc-\1\2\3/'
+def glibc_list_tags(tags):
+    return _grep_v(rb'cvs', tags)
+
+def glibc_list_tags_h(tags):
+    b1 = _tac(_grep_v(rb'cvs', _grep_v(rb'fedora', _grep(rb'glibc', tags))))
+    b1 = _sed(rb'^glibc-([0-9]*)(\.[0-9]*)(.*)$',
+              rb'v\1 v\1\2 glibc-\1\2\3', b1)
+    b2 = _tac(_grep(rb'fedora', _grep_v(rb'cvs', tags)))
+    b2 = _sed(rb'^fedora/glibc-([0-9]*)(\.[0-9]*)(.*)$',
+              rb'fedora v\1\2 fedora/glibc-\1\2\3', b2)
+    return b1 + b2
+
+# grub.sh list_tags_h (the first '.' in the pattern is any character,
+# unescaped in the shell):
+#   tac | sed -r 's/^(grub-)?([0-9]+).([0-9]+)([A-Za-z0-9.-]*)$/\2 \2.\3 \1\2.\3\4/'
+def grub_list_tags_h(tags):
+    return _sed(rb'^(grub-)?([0-9]+).([0-9]+)([A-Za-z0-9.-]*)$',
+                rb'\2 \2.\3 \1\2.\3\4', _tac(tags))
+
+# linux.sh get_tags, the capture-group shuffle. The first sed rewrites
+# each tag so that sort -V orders it by the pieces that matter (the
+# numbered part up front, pre/alpha suffixes at the end); the second
+# sed reassembles it. \60 in the replacement is group 6 then a
+# literal 0 (GNU sed falls back from the nonexistent group 60).
+def _linux_shuffle(m):
+    g = m.groups()
+    return (g[1] + b'#' + g[2] + b'@' + g[3] + b'@' + g[4] + b'@' +
+            g[5] + b'0@' + g[0] + b'.0')
+
+def _linux_unshuffle(m):
+    g = m.groups()
+    return g[5] + b''.join(g[:5])
+
+_LINUX_SHUFFLE = re.compile(
+    rb'^(pre|lia64-|)(v?[0-9\.]*)(pre|-[^pf].*|)(alpha|-[pf].*|)([0-9]*)(.*)$')
+_LINUX_UNSPLIT = re.compile(rb'^(.*)#(.*)@(.*)@(.*)@(.*)0@(.*)\.0$')
+
+def linux_get_tags(raw):
+    keys = [_LINUX_SHUFFLE.sub(_linux_shuffle, tag, count=1) for tag in raw]
+    return [_LINUX_UNSPLIT.sub(_linux_unshuffle, key, count=1)
+            for key in version_sort(keys)]
+
+# linux.sh list_tags_h:
+#   tac | sed -r 's/^(pre|lia64-|)(v?)([0-9]*)\.([0-9]*)(.*)$/v\3 v\3.\4 \1\2\3.\4\5/'
+def linux_list_tags_h(tags):
+    return _sed(rb'^(pre|lia64-|)(v?)([0-9]*)\.([0-9]*)(.*)$',
+                rb'v\3 v\3.\4 \1\2\3.\4\5', _tac(tags))
+
+# llvm.sh (note the tac before the grep in list_tags: llvmorg tags are
+# listed newest first — the live behavior):
+#   tac | grep ^llvmorg-[0-9]*[\.][0-9]*
+#   grep ^llvmorg | grep -v init | tac |
+#     sed -r 's/^llvmorg-([0-9]*)\.([0-9]*)(.*)$/v\1 v\1.\2 llvmorg-\1.\2\3/'
+#   git tag | grep 'llvmorg' | grep -v init | sort -Vr
+_LLVM_ANN = rb'^llvmorg-[0-9]*[\\.][0-9]*'
+
+def llvm_list_tags(tags):
+    return _grep(_LLVM_ANN, _tac(tags))
+
+def llvm_list_tags_h(tags):
+    tags = _tac(_grep_v(rb'init', _grep(rb'^llvmorg', tags)))
+    return _sed(rb'^llvmorg-([0-9]*)\.([0-9]*)(.*)$',
+                rb'v\1 v\1.\2 llvmorg-\1.\2\3', tags)
+
+def llvm_latest_tags(raw):
+    return _sort_vr(_grep_v(rb'init', _grep(rb'llvmorg', raw)))
+
+# mesa.sh, same shapes as llvm's:
+#   tac | grep ^mesa-[0-9]*[\.][0-9]*
+#   grep ^mesa-[0-9]*[\.][0-9]* | tac |
+#     sed -r 's/^mesa-([0-9]*)(\.[0-9]*)(.*)$/v\1 v\1\2 mesa-\1\2\3/'
+#   git tag | version_dir | grep ^mesa-[0-9]*[\.][0-9]* | grep -v '\-rc' | sort -Vr
+#     (version_dir is the identity: mesa does not override it)
+_MESA_ANN = rb'^mesa-[0-9]*[\\.][0-9]*'
+
+def mesa_list_tags(tags):
+    return _grep(_MESA_ANN, _tac(tags))
+
+def mesa_list_tags_h(tags):
+    return _sed(rb'^mesa-([0-9]*)(\.[0-9]*)(.*)$',
+                rb'v\1 v\1\2 mesa-\1\2\3', _tac(_grep(_MESA_ANN, tags)))
+
+def mesa_latest_tags(raw):
+    return _sort_vr(_grep_v(rb'-rc', _grep(_MESA_ANN, raw)))
+
+# op-tee.sh:
+#   grep '^[0-9]\.'
+#   grep '^[0-9]\.' | tac | <the busybox sed>
+#   git tag | grep '^[0-9]\.' | grep -v '\-rc' | sort -Vr
+def op_tee_list_tags(tags):
+    return _grep(rb'^[0-9]\.', tags)
+
+def op_tee_list_tags_h(tags):
+    return busybox_list_tags_h(_grep(rb'^[0-9]\.', tags))
+
+def op_tee_latest_tags(raw):
+    return _sort_vr(_grep_v(rb'-rc', _grep(rb'^[0-9]\.', raw)))
+
+# qemu.sh list_tags_h, three blocks (the last one a literal line):
+#   grep -E "^v[0-9].*" | tac | sed -r 's/^(v[0-9])\.([0-9]*)(.*)$/\1 \1.\2 \1.\2\3/'
+#   grep "release" | tac | sed -r 's/^(release)_([0-9_]*)$/old \1 \1_\2/'
+#   echo "old initial initial"
+def qemu_list_tags_h(tags):
+    b1 = _sed(rb'^(v[0-9])\.([0-9]*)(.*)$', rb'\1 \1.\2 \1.\2\3',
+              _tac(_grep(rb'^v[0-9].*', tags)))
+    b2 = _sed(rb'^(release)_([0-9_]*)$', rb'old \1 \1_\2',
+              _tac(_grep(rb'release', tags)))
+    return b1 + b2 + [b'old initial initial']
+
+# toybox.sh list_tags_h (like the busybox one, but no v prefixes):
+#   tac | sed -r 's/^([0-9]*)\.([0-9]*)(.*)$/\1 \1.\2 \1.\2\3/'
+def toybox_list_tags_h(tags):
+    return _sed(rb'^([0-9]*)\.([0-9]*)(.*)$', rb'\1 \1.\2 \1.\2\3',
+                _tac(tags))
+
+# u-boot.sh list_tags_h, three blocks:
+#   grep '^v20' | tac | sed -r 's/^(v20..)\.([0-9][0-9])(.*)$/\1 \1.\2 \1.\2\3/'
+#   grep -E '^(v1|U)' | tac | sed -r 's/^/old by-version /'
+#   grep -E '^(LABEL|DENX)' | tac | sed -r 's/^/old by-date /'
+def u_boot_list_tags_h(tags):
+    b1 = _sed(rb'^(v20..)\.([0-9][0-9])(.*)$', rb'\1 \1.\2 \1.\2\3',
+              _tac(_grep(rb'^v20', tags)))
+    b2 = _sed(rb'^', b'old by-version ', _tac(_grep(rb'^(v1|U)', tags)))
+    b3 = _sed(rb'^', b'old by-date ', _tac(_grep(rb'^(LABEL|DENX)', tags)))
+    return b1 + b2 + b3
+
+# zephyr.sh:
+#   grep -v '^zephyr-v'
+#   grep -v '^zephyr-v' | tac |
+#     sed -r 's/^(v[0-9]*)\.([0-9]*)(.*)$/\1 \1.\2 \1.\2\3/'
+#   git tag | grep -v '^zephyr-v' | version_dir | grep -v '\-rc' | sort -Vr
+#     (version_dir is the identity: zephyr does not override it)
+def zephyr_list_tags(tags):
+    return _grep_v(rb'^zephyr-v', tags)
+
+def zephyr_list_tags_h(tags):
+    return _sed(rb'^(v[0-9]*)\.([0-9]*)(.*)$', rb'\1 \1.\2 \1.\2\3',
+                _tac(_grep_v(rb'^zephyr-v', tags)))
+
+def zephyr_latest_tags(raw):
+    return _sort_vr(_grep_v(rb'-rc', _grep_v(rb'^zephyr-v', raw)))
+
+
+TAG_PIPELINES = {
+    'amazon-freertos': TagConfig(list_tags_h=amazon_freertos_list_tags_h,
+                                 latest_tags=amazon_freertos_latest_tags),
+    'arm-trusted-firmware': TagConfig(list_tags_h=atf_list_tags_h),
+    'barebox': TagConfig(list_tags_h=barebox_list_tags_h),
+    'bluez': TagConfig(list_tags=bluez_list_tags, list_tags_h=bluez_list_tags_h,
+                       latest_tags=bluez_latest_tags),
+    'busybox': TagConfig(version_dir=busybox_version_dir,
+                         version_rev=busybox_version_rev,
+                         list_tags_h=busybox_list_tags_h),
+    'coreboot': TagConfig(list_tags_h=_num_tags_h),
+    'dpdk': TagConfig(list_tags_h=dpdk_list_tags_h),
+    'freebsd': TagConfig(version_dir=freebsd_version_dir,
+                         version_rev=freebsd_version_rev),
+    'glibc': TagConfig(list_tags=glibc_list_tags, list_tags_h=glibc_list_tags_h),
+    'grub': TagConfig(list_tags_h=grub_list_tags_h),
+    'linux': TagConfig(get_tags=linux_get_tags, list_tags_h=linux_list_tags_h),
+    'llvm': TagConfig(list_tags=llvm_list_tags, list_tags_h=llvm_list_tags_h,
+                      latest_tags=llvm_latest_tags),
+    'mesa': TagConfig(list_tags=mesa_list_tags, list_tags_h=mesa_list_tags_h,
+                      latest_tags=mesa_latest_tags),
+    'ofono': TagConfig(list_tags_h=_num_tags_h),
+    'op-tee': TagConfig(list_tags=op_tee_list_tags, list_tags_h=op_tee_list_tags_h,
+                        latest_tags=op_tee_latest_tags),
+    'qemu': TagConfig(list_tags_h=qemu_list_tags_h),
+    'toybox': TagConfig(list_tags_h=toybox_list_tags_h),
+    'u-boot': TagConfig(list_tags_h=u_boot_list_tags_h),
+    'xen': TagConfig(version_dir=xen_version_dir, version_rev=xen_version_rev),
+    'zephyr': TagConfig(list_tags=zephyr_list_tags, list_tags_h=zephyr_list_tags_h,
+                        latest_tags=zephyr_latest_tags),
+}
+
+_DEFAULT_TAGS = TagConfig()
+
+def _tag_config(project=None):
+    return TAG_PIPELINES.get(project, _DEFAULT_TAGS)
+
+def _get_tags(repo_dir, cfg):
+    '''script.sh get_tags: the project's pipeline over `git tag`'''
+    raw = git_lines(repo_dir, 'tag')
+    if cfg.get_tags is not None:
+        return cfg.get_tags(raw)
+    return default_tag_pipeline(cfg.version_dir(raw))
+
+
+def version_dir(tags, project=None):
+    '''Tag names -> display versions (script.sh version_dir)'''
+    return _tag_config(project).version_dir(tags)
+
+def version_rev(v, project=None):
+    '''Display version -> tag name; b'' when the name does not start
+    the way the project's grep wants, like `echo v | version_rev`
+    whose output the command substitution reduces to nothing'''
+    return _tag_config(project).version_rev(v)
+
 def list_tags(repo_dir, project=None):
-    '''All tags of the repository, oldest first, in the project's
-    version order (the default sort -V pipeline unless a project
-    entry in TAG_PIPELINES overrides it)'''
-    tags = git_lines(repo_dir, 'tag')
-    pipeline = TAG_PIPELINES.get(project, default_tag_pipeline)
-    return pipeline(tags)
+    '''All tags of the repository, oldest first in the project's
+    version order (script.sh list-tags; llvm and mesa list newest
+    first — their plugin reverses before filtering)'''
+    cfg = _tag_config(project)
+    return cfg.list_tags(_get_tags(repo_dir, cfg))
+
+def list_tags_h(repo_dir, project=None):
+    '''Tag menu lines "topmenu submenu tag", newest first (script.sh
+    list-tags -h); lines the project's sed does not match pass
+    through, so one-field lines occur and query.py tolerates them'''
+    cfg = _tag_config(project)
+    return cfg.list_tags_h(_get_tags(repo_dir, cfg))
+
+def latest_tags(repo_dir, project=None):
+    '''Non-rc tags, newest first (script.sh get-latest-tags)'''
+    cfg = _tag_config(project)
+    if cfg.latest_tags is not None:
+        return cfg.latest_tags(git_lines(repo_dir, 'tag'))
+    return _sort_vr(_grep_v(rb'-rc', cfg.version_dir(git_lines(repo_dir, 'tag'))))
 
 def list_blobs(repo_dir, tag):
     '''Every blob of the tag as (hash, filename, path) triples, in
@@ -274,3 +667,77 @@ def get_blob_lines(hash):
     lines = get_blob(hash).split(b'\n')
     del lines[-1]
     return lines
+
+
+# ---- script.sh's version-addressed queries (get-file/get-dir/
+# get-type), ported with their quirks ----
+
+def _b(arg):
+    '''The argument as bytes, as the shell and git pass it around'''
+    return arg if isinstance(arg, bytes) else os.fsencode(arg)
+
+def denormalize(path):
+    '''script.sh denormalize(): `echo $1 | cut -c 2-` — drop the
+    leading character of the /-prefixed web path. $1 is unquoted, so
+    word splitting cuts the path at its first whitespace and an
+    empty or all-whitespace path gives b'' (no argument reached the
+    function) — the live behavior'''
+    words = path.split()
+    return words[0][1:] if words else b''
+
+def _rev_path(project, version, path):
+    '''"<tag>:<path>": the rev:prefix git address script.sh builds
+    from the display version through version_rev'''
+    return version_rev(_b(version), project) + b':' + denormalize(_b(path))
+
+def _git_or_empty(repo_dir, *args):
+    '''git's stdout, or b'' when git fails (script.sh's 2>/dev/null)'''
+    p = subprocess.run(('git',) + args, cwd=repo_dir, stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL)
+    return p.stdout
+
+def get_file(repo_dir, project, version, path):
+    '''Blob content at a display version (script.sh get_file):
+    git cat-file blob "<rev>:<path minus the leading marker>"'''
+    return _git_or_empty(repo_dir, 'cat-file', 'blob',
+                         _rev_path(project, version, path))
+
+def get_type(repo_dir, project, version, path):
+    '''blob/tree/... of a path at a display version (script.sh
+    get_type), stdout bytes as script.sh printed them'''
+    return _git_or_empty(repo_dir, 'cat-file', '-t',
+                         _rev_path(project, version, path))
+
+def get_dir(repo_dir, project, version, path):
+    '''Directory listing at a display version (script.sh get_dir),
+    quirks included:
+    - awk's field reorder "$2 $5 $4 $1" keeps only the first word of
+      a path containing whitespace (ls-tree quotes such paths, so the
+      quotes are part of that word)
+    - grep -v " \\." drops dotfile entries: it runs on the reordered
+      line, so an unquoted .name drops ("type .name ...") while a
+      quoted one survives ("type \".name ...")
+    - sort -t ' ' -k 1,1r -k 2,2: type reversed, then path word, the
+      whole line as sort's last resort
+    Output is the sort pipeline's bytes, newline-terminated lines'''
+    out = _git_or_empty(repo_dir, 'ls-tree', '-l',
+                        _rev_path(project, version, path))
+    lines = []
+    for line in out.split(b'\n')[:-1]:
+        fields = line.split() # awk's default field splitting
+        pick = lambda i: fields[i] if i < len(fields) else b''
+        lines.append(b' '.join((pick(1), pick(4), pick(3), pick(0))))
+    lines = [line for line in lines if b' .' not in line]
+
+    def compare(a, b):
+        fa, fb = a.split(b' '), b.split(b' ')
+        if fa[0] != fb[0]: # -k 1,1r
+            return (fb[0] > fa[0]) - (fb[0] < fa[0])
+        ka = fa[1] if len(fa) > 1 else b''
+        kb = fb[1] if len(fb) > 1 else b''
+        if ka != kb: # -k 2,2
+            return (ka > kb) - (ka < kb)
+        return (a > b) - (a < b) # last resort: the whole line
+
+    lines.sort(key=functools.cmp_to_key(compare))
+    return b''.join(line + b'\n' for line in lines)

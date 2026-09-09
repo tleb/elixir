@@ -3,6 +3,11 @@
 # project under t/goldens/, from the tags-only repos under the Elixir data
 # directory (default: ../elixir-data relative to this repository).
 #
+# These are the regression goldens of the Python port: t/test_goldens.py
+# asserts that elixir/repo.py (TAG_PIPELINES and the get-type port)
+# reproduces them byte for byte. The port is C-locale (bytes), matching
+# the LC_ALL=C pinned here.
+#
 # Each repo is expected at <data>/<project>/repo, as created by:
 #   git init --bare <dir> &&
 #   git -C <dir> remote add origin <url> &&

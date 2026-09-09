@@ -176,12 +176,14 @@ def test_dts_comp_support_table():
 
 def test_tag_pipelines_dispatch(monkeypatch):
     '''Unlisted projects get the default pipeline; a per-project entry
-    overrides it (the shape project ports plug into). The default
-    itself is pinned against the shell pipeline over all clones.'''
+    overrides the pieces it sets (the shape the projects/*.sh ports
+    plug into). The default itself is pinned against the shell
+    pipeline over all clones, and every entry against t/goldens.'''
     monkeypatch.setattr(repo, 'git_lines', lambda repo_dir, *args: [b'v1', b'v2'])
     assert repo.list_tags('r') == repo.default_tag_pipeline([b'v1', b'v2'])
     monkeypatch.setattr(repo, 'TAG_PIPELINES',
-                        {'dummy': lambda tags: list(reversed(tags))})
+                        {'dummy': repo.TagConfig(
+                            list_tags=lambda tags: list(reversed(tags)))})
     assert repo.list_tags('r', 'dummy') == [b'v2', b'v1']
 
 
