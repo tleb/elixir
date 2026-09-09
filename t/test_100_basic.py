@@ -30,8 +30,23 @@ import sys
 from pathlib import Path
 
 from conftest import TAG
+from elixir import data
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_deflist_families_order_is_arrival_independent():
+    'Canonical record bytes regardless of append order (thread scheduling)'
+    def built_in(calls):
+        d = data.DefList()
+        for id, family in calls:
+            d.append(id, 'variable', 2, family)
+        return d.pack()
+
+    assert built_in([(1, 'C'), (2, 'D')]) == built_in([(2, 'D'), (1, 'C')])
+    assert built_in([(1, 'C'), (2, 'D')]).endswith(b'#C,D')
+    # Single family stays as-is
+    assert built_in([(1, 'D')]).endswith(b'#D')
 
 
 def search(query, ident, family):

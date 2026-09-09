@@ -98,11 +98,16 @@ class DefList:
         return self.data + b'#' + self.families
 
     def add_family(self, family):
+        # Canonical order as in append(): defs of a shared ident are
+        # appended by parallel threads, so a family's arrival order
+        # follows thread scheduling. Sorted insertion makes the record
+        # bytes depend only on the set of families.
         family = family.encode()
-        if not family in self.families.split(b','):
-            if self.families != b'':
-                family = b',' + family
-            self.families += family
+        fams = self.families.split(b',') if self.families else []
+        if family not in fams:
+            fams.append(family)
+            fams.sort()
+        self.families = b','.join(fams)
 
     def get_families(self):
         return self.families.decode().split(',')
