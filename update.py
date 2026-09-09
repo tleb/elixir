@@ -60,7 +60,6 @@ from elixir.lexers import TokenType
 from elixir import repo
 from elixir import parse
 import elixir.lib as lib
-from elixir.lib import scriptLines
 import elixir.data as data
 from elixir.data import PathList
 from elixir.project_utils import get_lexer
@@ -307,7 +306,9 @@ def update_doc_comments(idxs):
         family = lib.getFileFamily(filename)
         if family in [None, 'M']: continue
 
-        lines = scriptLines('parse-docs', hash, filename)
+        # script.sh parse-docs, ported: the perl ran on a temp copy of
+        # the blob, fetched here through the batch reader
+        lines = parse.parse_doc_comments(repo.get_blob(hash))
         for l in lines:
             ident, line = l.split(b' ')
             line = int(line.decode())
