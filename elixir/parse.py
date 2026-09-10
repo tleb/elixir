@@ -79,14 +79,16 @@ def _temp_name(i, filename):
         dot += _TEMP_SAFE.sub(b'_', suffix)[:48]
     return b'%d-%s%s' % (i, stem, dot)
 
-def _chunk_ctags(flags, entries):
+def _chunk_ctags(flags, entries, stderr_out=None):
     '''One ctags invocation for a chunk of (key, blob, filename)
     entries: every blob written under its temp name, ctags run once,
     the output attributed by the input column. Returns {key: [-x
     lines]}, in ctags' output order; a blob ctags said nothing about
     is simply missing from the map, and a line whose fourth column is
     not one of the paths (an empty name shifts the columns) belongs
-    to no blob and is dropped'''
+    to no blob and is dropped. ctags' stderr is captured (its Notice
+    lines would otherwise leak into the caller's log); callers that
+    want it pass a list to append it to'''
     tmp = tempfile.mkdtemp()
     try:
         keys_by_path = {}
@@ -98,8 +100,10 @@ def _chunk_ctags(flags, entries):
             keys_by_path[path] = key
             paths.append(path)
         p = subprocess.run((b'ctags', b'-x') + flags + tuple(paths),
-                           stdout=subprocess.PIPE)
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         # The exit status is ignored: the pipelines swallowed it too
+        if stderr_out is not None:
+            stderr_out.append(p.stderr)
         lines = {}
         for line in _shell_lines(p.stdout):
             fields = line.split(None, 4)
@@ -172,11 +176,12 @@ _DEFS_FLAGS = {
     'D': (b'--language-force=dts',),
 }
 
-def parse_defs_chunk(items):
+def parse_defs_chunk(items, stderr_out=None):
     '''parse_defs for a chunk of (blob, filename, family) triples: one
     ctags per (chunk, family) instead of one per blob, everything
     else per blob as before. Returns the per-blob line lists, in the
-    input order'''
+    input order; ctags' captured stderr lands in stderr_out, if given
+    '''
     out = [[] for _ in items]
     groups = {}
     for i, (blob, filename, family) in enumerate(items):
@@ -185,18 +190,19 @@ def parse_defs_chunk(items):
                 filename = os.fsencode(filename)
             groups.setdefault(family, []).append((i, blob, filename))
     for family, entries in groups.items():
-        lines = _chunk_ctags(_DEFS_FLAGS[family], entries)
+        lines = _chunk_ctags(_DEFS_FLAGS[family], entries, stderr_out)
         for i, blob, filename in entries:
             out[i] = _PARSERS[family](blob, lines.get(i, ()))
     return out
 
-def parse_defs(blob, filename, family):
+def parse_defs(blob, filename, family, stderr_out=None):
     '''The b"ident type line" lines script.sh parse-defs printed for
     the blob: same bytes, same order. filename is the ORIGINAL
     basename (ctags keys its language off it; update.py hands it over
     as str, script.sh passed it through argv unchanged), family one
-    of C, K, D; other families printed nothing, like the shell case'''
-    return parse_defs_chunk([(blob, filename, family)])[0]
+    of C, K, D; other families printed nothing, like the shell case.
+    ctags' captured stderr lands in stderr_out, if given'''
+    return parse_defs_chunk([(blob, filename, family)], stderr_out)[0]
 
 '''Port of find-file-doc-comments.pl (script.sh parse-docs): the
 b"ident line" lines the perl printed for the blob, associating
@@ -376,19 +382,20 @@ def _doc_comments(blob, lines):
 # makes the temp names' extensions irrelevant
 _DOCS_FLAGS = (b'--c-kinds=+p-m', b'--language-force=C')
 
-def parse_doc_comments_chunk(blobs):
+def parse_doc_comments_chunk(blobs, stderr_out=None):
     '''parse_doc_comments for a chunk of blobs: the b"/\*\*" gate first
     (a doc comment needs an opener, and 80% of kernel C/H files have
     none at all, so most blobs never reach ctags), then ONE ctags for
     the chunk's survivors. The ^operator grep happened before the
     maps, as in the perl. Returns the per-blob line lists, in the
-    input order'''
+    input order; ctags' captured stderr lands in stderr_out, if given
+    '''
     out = [[] for _ in blobs]
     entries = [(i, blob, b'') for i, blob in enumerate(blobs)
                if b'/**' in blob]
     if not entries:
         return out
-    lines = _chunk_ctags(_DOCS_FLAGS, entries)
+    lines = _chunk_ctags(_DOCS_FLAGS, entries, stderr_out)
     for i, blob, _ in entries:
         blob_lines = [l for l in lines.get(i, ())
                       if not l.startswith(b'operator ')]

@@ -49,11 +49,25 @@
 # accesses are safe; only read-modify-write cycles on a key are not, and
 # each has a dedicated lock, held around the cycle only, never around
 # lexing or subprocess calls.
+#
+# Logging: the parent process is the single writer. Every line carries
+# a [HH:MM:SS] wall-clock timestamp; workers and pool processes never
+# print — they return their counters (lexer errors, captured ctags
+# stderr) inside their results and the parent aggregates them, so
+# parallel prints can no longer interleave mid-line. Progress inside a
+# phase is driven by the parent's consumption of results, throttled to
+# one line per progress_min_interval; the run ends with a human summary
+# and one machine-parseable SUMMARY line (JSON) for post-hoc phase-time
+# analysis. ELIXIR_LOG_VERBOSE=1 additionally dumps the captured ctags
+# stderr and the first lexer-error samples before the summary.
 
+import json
 import multiprocessing
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from sys import argv
 from threading import Lock
 
@@ -95,7 +109,10 @@ comps_docs_lock = Lock() # db.comps_docs
 executor = None # Created on first use; its threads live for the whole run
 
 def parallel(fn, items):
-    '''Run fn on every item with the thread pool, surfacing failures.'''
+    '''Run fn on every item with the thread pool, yielding each result
+    as the caller consumes it, so the caller drives progress from
+    completion and surfaces failures (a worker exception propagates
+    from the generator, as it did from the old list()).'''
     global executor
     if not items: return
     # One executor for the whole run. Threads cache per-thread state
@@ -103,7 +120,7 @@ def parallel(fn, items):
     # would leak: its threads die with it and the pipes stay open.
     if executor is None:
         executor = ThreadPoolExecutor(max_workers=num_threads)
-    list(executor.map(fn, items))
+    yield from executor.map(fn, items)
 
 
 def chunks(idxs):
@@ -115,8 +132,101 @@ def chunks(idxs):
         yield idxs[i:i+size]
 
 
-def progress(msg):
-    print(project + ' - ' + msg, flush=True)
+# ---- Logging: everything below prints from the parent only ----
+
+log_verbose = os.environ.get('ELIXIR_LOG_VERBOSE') == '1'
+
+progress_min_interval = 5.0 # seconds between in-phase progress lines
+
+# The phases of one tag, in execution order; the SUMMARY line always
+# carries all of them, 0.0 for the ones a project does not run
+phases = ('ids', 'vers', 'defs', 'docs', 'comps', 'refs', 'comps_docs')
+
+# Run-wide aggregates, written by the parent as it consumes results
+run_phase_s = dict.fromkeys(phases, 0.0)
+lexer_errors = 0
+lexer_error_samples = [] # the first ERROR tokens, verbose mode only
+max_samples = 10
+ctags_notices = 0
+ctags_stderr = [] # captured ctags stderr, verbose mode only
+
+def log(msg):
+    '''One timestamped line, flushed: the only print in the run'''
+    print(datetime.now().strftime('[%H:%M:%S] ') + msg, flush=True)
+
+def fmt_secs(s):
+    '''A duration: tenths of a second under a minute, else m+s'''
+    if s < 60:
+        return '%.1fs' % s
+    m, sec = divmod(int(round(s)), 60)
+    return '%dm%02ds' % (m, sec)
+
+def fmt_eta(s):
+    '''An ETA: whole seconds, floored at zero'''
+    s = max(0, int(s))
+    if s < 60:
+        return '%ds' % s
+    return '%dm%02ds' % divmod(s, 60)
+
+def collect_ctags_stderr(stderr):
+    '''Count a worker's captured ctags notices; keep the text only in
+    verbose mode'''
+    global ctags_notices
+    if not stderr:
+        return
+    ctags_notices += stderr.count(b'ctags: Notice:')
+    if log_verbose:
+        ctags_stderr.append(stderr)
+
+def count_lexer_errors(count, samples):
+    '''Aggregate a worker's lexer-error counter; keep the first samples'''
+    global lexer_errors
+    lexer_errors += count
+    if len(lexer_error_samples) < max_samples:
+        lexer_error_samples.extend(samples[:max_samples - len(lexer_error_samples)])
+
+class PhaseProgress:
+    '''In-phase progress, driven by the parent's consumption of phase
+    results (never from the workers): at most one line per
+    progress_min_interval of phase time, and a final 100% line once any
+    line was printed — a phase shorter than the interval prints nothing
+    at all. The ETA is the remaining blobs over the average rate so far,
+    approximate like every ETA.'''
+    def __init__(self, tag, phase, total):
+        self.ctx = project + ' ' + tag.decode() + ' ' + phase
+        self.total = total
+        self.done = 0
+        self.start = time.monotonic()
+        self.last = self.start
+
+    def update(self, done):
+        self.done = done
+        t = time.monotonic()
+        final = self.done >= self.total
+        if not final and t - self.last < progress_min_interval:
+            return
+        if final and self.last == self.start:
+            return # nothing was shown: a short phase stays silent
+        rate = self.done / (t - self.start)
+        msg = ('%s %d%% %d/%d blobs, %d blobs/s'
+               % (self.ctx, self.done * 100 // self.total, self.done,
+                  self.total, round(rate)))
+        if not final:
+            msg += ', ETA ' + fmt_eta((self.total - self.done) / rate)
+        log(msg)
+        self.last = t
+
+class PhaseTimer:
+    '''Times one phase into the tag's dict and the run-wide totals'''
+    def __init__(self, times, name):
+        self.times = times
+        self.name = name
+    def __enter__(self):
+        self.start = time.monotonic()
+    def __exit__(self, *exc):
+        seconds = time.monotonic() - self.start
+        self.times[self.name] = seconds
+        run_phase_s[self.name] += seconds
 
 
 def update_blob_ids(blobs):
@@ -171,9 +281,11 @@ def generate_defs_caches():
 
 
 def update_definitions(idxs):
+    '''One chunk of the defs phase, in a pool thread: writes db.defs,
+    returns the chunk's captured ctags stderr (byte string) instead of
+    printing anything'''
+    stderr_out = []
     for idx in idxs:
-        if idx % 1000 == 0: progress('defs: ' + str(idx))
-
         hash = db.hash.get(idx)
         filename = db.file.get(idx)
 
@@ -182,7 +294,8 @@ def update_definitions(idxs):
 
         # One ctags subprocess (parse.parse_defs), the blob fetched
         # through the batch reader
-        lines = parse.parse_defs(repo.get_blob(hash), filename, family)
+        lines = parse.parse_defs(repo.get_blob(hash), filename, family,
+                                 stderr_out)
 
         for l in lines:
             ident, type, line = l.split(b' ')
@@ -202,16 +315,23 @@ def update_definitions(idxs):
                 obj.append(idx, type, line, family)
                 db.defs.put(ident, obj)
 
+    return b''.join(stderr_out)
+
 
 def _refs_lex_chunk(triples):
-    '''Lex a chunk of (idx, path, hash); return [(idx, family, idents)].
+    '''Lex a chunk of (idx, path, hash); return ([(idx, family,
+    idents)], lexer error count, first error samples).
 
     idents maps every identifier token of the blob to the list of its
     line numbers. Workers carry no per-tag state, so the pool can be
     forked once at startup and live across tags; gating on definitions
-    happens in the parent, which owns the defs state.
+    happens in the parent, which owns the defs state. Error tokens are
+    counted and sampled here, never printed: pool processes do not
+    write to the log.
     '''
     out = []
+    errors = 0
+    samples = []
     for idx, filename, hash in triples:
         # getFileFamily expects a basename; the name-based families
         # (kconfig*, makefile*) must match in subdirectories too
@@ -235,7 +355,9 @@ def _refs_lex_chunk(triples):
         idents = {}
         for token_type, token, _, line in lexer(code).lex():
             if token_type == TokenType.ERROR:
-                print("error token: ", token, token_type, filename, line, file=sys.stderr)
+                errors += 1
+                if len(samples) < max_samples:
+                    samples.append((token, filename, line))
                 continue
 
             token = prefix + token.encode()
@@ -252,10 +374,10 @@ def _refs_lex_chunk(triples):
                     idents[token] = [line]
 
         out.append((idx, family, idents))
-    return out
+    return out, errors, samples
 
 
-def update_references(triple_chunks):
+def update_references(triple_chunks, progress):
     '''Lex references in the pool forked at startup; gate on definitions
     and write db.refs from this thread.
 
@@ -272,9 +394,10 @@ def update_references(triple_chunks):
     global defs_keys
     defs_keys = set(db.defs.get_keys())
     done = 0
-    total = len(triple_chunks)
-    for chunk in refs_pool.imap(_refs_lex_chunk, triple_chunks):
-        for idx, family, idents in chunk:
+    for chunk, (lexed, errors, samples) in zip(
+            triple_chunks, refs_pool.imap(_refs_lex_chunk, triple_chunks)):
+        count_lexer_errors(errors, samples)
+        for idx, family, idents in lexed:
             for ident, lines in idents.items():
                 if ident not in defs_keys:
                     continue
@@ -292,8 +415,8 @@ def update_references(triple_chunks):
 
                 obj.append(idx, lines, family)
                 db.refs.put(ident, obj)
-        done += 1
-        if done % 10 == 0: progress('refs: chunk %d/%d' % (done, total))
+        done += len(chunk)
+        progress.update(done)
 
 
 def _docs_chunk(triples):
@@ -301,7 +424,9 @@ def _docs_chunk(triples):
     worker: the /** gate, the temp files, one chunked ctags and the
     scan. Workers carry no per-tag state, like the refs workers; the
     blob is fetched through the worker's own batch reader. Returns
-    (idx, family, lines) per parsed blob'''
+    ([(idx, family, lines) per parsed blob], the chunk's captured
+    ctags stderr): pool processes do not print, the parent aggregates
+    what they return'''
     metas = []
     blobs = []
     for idx, filename, hash in triples:
@@ -311,10 +436,12 @@ def _docs_chunk(triples):
         metas.append((idx, family))
         blobs.append(repo.get_blob(hash))
 
-    lines = parse.parse_doc_comments_chunk(blobs)
-    return [(idx, family, out) for (idx, family), out in zip(metas, lines)]
+    stderr_out = []
+    lines = parse.parse_doc_comments_chunk(blobs, stderr_out)
+    return ([(idx, family, out) for (idx, family), out in zip(metas, lines)],
+            b''.join(stderr_out))
 
-def update_doc_comments(triple_chunks):
+def update_doc_comments(triple_chunks, progress):
     '''Doc comments in the pool forked at startup, like refs: the scan
     around the ctags output is pure Python and GIL-bound, so it runs
     in process workers while the pool idles between the defs and
@@ -323,9 +450,10 @@ def update_doc_comments(triple_chunks):
     are deterministic and single-threaded (no docs_lock needed,
     like refs).'''
     done = 0
-    total = len(triple_chunks)
-    for chunk in refs_pool.imap(_docs_chunk, triple_chunks):
-        for idx, family, lines in chunk:
+    for chunk, (parsed, stderr) in zip(
+            triple_chunks, refs_pool.imap(_docs_chunk, triple_chunks)):
+        collect_ctags_stderr(stderr)
+        for idx, family, lines in parsed:
             for l in lines:
                 ident, line = l.split(b' ')
                 line = int(line.decode())
@@ -337,14 +465,14 @@ def update_doc_comments(triple_chunks):
 
                 obj.append(idx, str(line), family)
                 db.docs.put(ident, obj)
-        done += 1
-        if done % 10 == 0: progress('docs: chunk %d/%d' % (done, total))
+        done += len(chunk)
+        progress.update(done)
 
 
 def update_compatibles(idxs):
+    '''One chunk of the comps phase, in a pool thread: writes db.comps.
+    Nothing to return: the phase produces no worker-side counters.'''
     for idx in idxs:
-        if idx % 1000 == 0: progress('comps: ' + str(idx))
-
         hash = db.hash.get(idx)
         filename = db.file.get(idx)
 
@@ -373,9 +501,9 @@ def update_compatibles(idxs):
 
 
 def update_compatibles_bindings(idxs):
+    '''One chunk of the comps_docs phase, in a pool thread: writes
+    db.comps_docs. Like update_compatibles, nothing to return.'''
     for idx in idxs:
-        if idx % 1000 == 0: progress('comps_docs: ' + str(idx))
-
         if not idx in bindings_idxes: # Parse only bindings doc files
             continue
 
@@ -419,6 +547,8 @@ def current_tag():
 if len(argv) >= 2 and argv[1].isdigit():
     num_threads = max(1, int(argv[1]))
 
+run_start = time.monotonic()
+
 tag_buf = []
 for tag in repo.list_tags(lib.getRepoDir(), project):
     if not db.vers.exists(tag):
@@ -444,7 +574,8 @@ if interrupted is not None:
 
 num_tags = len(tag_buf)
 
-print(project + ' - found ' + str(num_tags) + ' new tags')
+log('%s: %d new tags (repo %s, data %s, %d threads)'
+    % (project, num_tags, lib.getRepoDir(), lib.getDataDir(), num_threads))
 
 if not num_tags:
     # Backward-compatibility: generate defs caches if they are empty.
@@ -457,9 +588,22 @@ if not num_tags:
 # The workers are stateless, so an early fork loses nothing.
 refs_pool = multiprocessing.get_context('fork').Pool(num_threads)
 
+def parallel_phase(name, fn, work, tag, times):
+    '''One thread-pool phase under its timer: the parent consumes the
+    workers' results as they arrive (aggregating whatever counters
+    they return) and prints all progress itself.'''
+    prog = PhaseProgress(tag, name, sum(len(chunk) for chunk in work))
+    with PhaseTimer(times, name):
+        done = 0
+        for chunk, res in zip(work, parallel(fn, work)):
+            collect_ctags_stderr(res)
+            done += len(chunk)
+            prog.update(done)
+
 def index_tag(tag):
     '''Index one tag: every phase runs for it before the next tag
-    starts, and db.vers records it only after the last phase.'''
+    starts, and db.vers records it only after the last phase. Returns
+    (per-phase seconds, new blob count).'''
     # Per-tag state, so each tag starts clean
     file_paths.clear()
     bindings_idxes.clear()
@@ -468,12 +612,15 @@ def index_tag(tag):
     # One walk over the tag's blobs feeds every phase below
     blobs = repo.list_blobs(lib.getRepoDir(), tag)
 
+    times = {}
+
     # Phase 1: assign idx numbers to the tag's new blobs
-    idxes = update_blob_ids(blobs)
-    progress('ids: ' + tag.decode() + ': ' + str(len(idxes)) + ' new blobs')
+    with PhaseTimer(times, 'ids'):
+        idxes = update_blob_ids(blobs)
 
     # Phase 2: versions - collect the paths, commit after phase 5
-    vers_obj = update_versions(blobs)
+    with PhaseTimer(times, 'vers'):
+        vers_obj = update_versions(blobs)
 
     # From here on the phases write defs, docs, comps and refs, which
     # cannot be rolled back: mark the tag as in-flight so that a run
@@ -483,11 +630,14 @@ def index_tag(tag):
 
     # Phase 3: definitions, doc comments, compatibles
     work = list(chunks(idxes))
-    parallel(update_definitions, work)
-    update_doc_comments([[(idx, db.file.get(idx), db.hash.get(idx))
-                          for idx in chunk] for chunk in work])
+    parallel_phase('defs', update_definitions, work, tag, times)
+    with PhaseTimer(times, 'docs'):
+        update_doc_comments(
+            [[(idx, db.file.get(idx), db.hash.get(idx))
+              for idx in chunk] for chunk in work],
+            PhaseProgress(tag, 'docs', len(idxes)))
     if dts_comp_support:
-        parallel(update_compatibles, work)
+        parallel_phase('comps', update_compatibles, work, tag, times)
 
     # Phase 4: references (needs all definitions)
     # The refs pool was forked at startup, before this tag's maps
@@ -495,23 +645,82 @@ def index_tag(tag):
     # its own persistent cat-file --batch pipe.
     triple_chunks = [[(idx, file_paths[idx].decode(), db.hash.get(idx)) for idx in chunk]
                      for chunk in work]
-    update_references(triple_chunks)
+    with PhaseTimer(times, 'refs'):
+        update_references(triple_chunks, PhaseProgress(tag, 'refs', len(idxes)))
 
     # Phase 5: compatibles from bindings documentation (needs all comps)
     if dts_comp_support:
-        parallel(update_compatibles_bindings, work)
+        parallel_phase('comps_docs', update_compatibles_bindings, work, tag, times)
 
     # Commit the tag: only now is it fully indexed. The sync makes
     # the completion marker durable before the marker cleanup.
     db.vers.put(tag, vers_obj, sync=True)
     db.vars.delete(current_tag_prefix + tag)
 
-    progress('done: ' + tag.decode())
+    return times, len(idxes)
+
+done_tags = 0
+done_blobs = 0
+tag_seconds = 0.0
 
 for tag in tag_buf:
-    index_tag(tag)
+    times, blobs = index_tag(tag)
+    done_tags += 1
+    done_blobs += blobs
+    tag_seconds += sum(times.values())
+
+    # Tag completion line with per-phase seconds and, once a rate
+    # exists, the run's average pace and ETA (average seconds per
+    # completed tag times the tags left — tag count, not blob
+    # weighted; approximate, like every ETA)
+    msg = ('%s %s (%d/%d): %d blobs, %s (%s)'
+           % (project, tag.decode(), done_tags, num_tags, blobs,
+              fmt_secs(sum(times.values())),
+              ' '.join('%s %s' % (p, fmt_secs(times[p]))
+                       for p in ('defs', 'docs', 'comps', 'refs', 'comps_docs')
+                       if p in times)))
+    if done_tags < num_tags:
+        avg = tag_seconds / done_tags
+        msg += ' — avg %s/tag' % fmt_secs(avg)
+        if done_tags >= 2:
+            msg += ', ETA ' + fmt_eta(avg * (num_tags - done_tags))
+    log(msg)
 
 refs_pool.terminate()
 refs_pool.join()
 
 generate_defs_caches()
+
+wall = time.monotonic() - run_start
+
+# Verbose detail first, so the summary stays the last thing in the log
+if log_verbose:
+    for token, filename, line in lexer_error_samples:
+        log('%s: lexer error token %r at %s:%d'
+            % (project, token, filename, line))
+    for stderr in ctags_stderr:
+        for line in stderr.decode('utf-8', 'replace').splitlines():
+            log('%s: ctags: %s' % (project, line))
+
+# The human summary: where the run's time went
+phase_total = sum(run_phase_s.values())
+log('%s: %d tags, %d new blobs, %s wall'
+    % (project, num_tags, done_blobs, fmt_secs(wall)))
+log('%s: phases: %s'
+    % (project, ' '.join(
+        '%s %s (%d%%)' % (p, fmt_secs(run_phase_s[p]),
+                          round(run_phase_s[p] * 100 / phase_total) if phase_total else 0)
+        for p in phases)))
+log('%s: %d lexer errors, %d ctags notices'
+    % (project, lexer_errors, ctags_notices))
+
+# The machine interface: one valid-JSON line for post-hoc analysis
+log('SUMMARY ' + json.dumps({
+    'project': project,
+    'tags': num_tags,
+    'blobs': done_blobs,
+    'wall_s': round(wall, 3),
+    'phases': {p: round(run_phase_s[p], 3) for p in phases},
+    'lexer_errors': lexer_errors,
+    'ctags_notices': ctags_notices,
+}))
