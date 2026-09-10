@@ -30,6 +30,10 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+import json
+import os
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -103,7 +107,7 @@ def test_update_cleans_stale_marker(build_env, tmp_path):
 
     result = update(env)
     assert result.returncode == 0, result.stdout
-    assert 'found 0 new tags' in result.stdout
+    assert '0 new tags' in result.stdout
 
 
 def update(env):
@@ -112,6 +116,47 @@ def update(env):
         env=env.env(), cwd=REPO_ROOT,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         universal_newlines=True)
+
+
+# The indexing log: every line timestamped by the parent (the single
+# writer), one tag line per completed tag and one machine-parseable
+# SUMMARY JSON line at the end
+def test_update_log_format(build_env, tmp_path):
+    env = build_env(tmp_path)
+    # Re-index from scratch with the output captured: build_env's
+    # own update.py run happened before the fixture returned its env
+    shutil.rmtree(env.data_dir)
+    os.mkdir(env.data_dir)
+
+    result = update(env)
+    assert result.returncode == 0, result.stdout
+
+    # Run start line: timestamp, project, tag count
+    assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj: 1 new tags \(repo .+, data .+, 4 threads\)$',
+                     result.stdout, re.M), result.stdout
+
+    # Tag line: timestamp, project tag (n/N), blobs, seconds, phases
+    assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj v5\.4 \(1/1\): '
+                     r'\d+ blobs, \S+ \(defs \S+ docs \S+ comps \S+ refs \S+ comps_docs \S+\)$',
+                     result.stdout, re.M), result.stdout
+
+    # The machine line parses as JSON with every phase
+    line = next(l for l in result.stdout.splitlines() if 'SUMMARY {' in l)
+    summary = json.loads(line.split('SUMMARY ', 1)[1])
+    assert summary['project'] == 'testproj'
+    assert summary['tags'] == 1
+    assert summary['blobs'] > 0
+    assert summary['wall_s'] > 0
+    assert set(summary['phases']) == {'ids', 'vers', 'defs', 'docs', 'comps',
+                                     'refs', 'comps_docs'}
+    assert summary['phases']['defs'] > 0
+    assert summary['phases']['refs'] > 0
+    assert isinstance(summary['lexer_errors'], int)
+    assert isinstance(summary['ctags_notices'], int)
+
+    # t/tree phases are all faster than the 5 s progress interval:
+    # no in-phase progress lines, only one line per tag
+    assert 'blobs/s' not in result.stdout
 
 
 def current_tag_marker(env, tag):
