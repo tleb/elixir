@@ -64,6 +64,12 @@ def test_documented_function_102(query):
     assert docs(query, 'documented_function_XYZZY') == [('issue102.c', '6')]
 
 
+def test_documented_function_cbus_driver(query):
+    # kernel-doc in the real v7.3-rc2 driver (provenance in README.adoc)
+    assert docs(query, 'cbus_send_bit') == \
+        [('drivers/i2c/busses/i2c-cbus-gpio.c', '45')]
+
+
 # Non-functions
 
 

@@ -6,7 +6,12 @@
 #
 # DTS coverage (the series decided this tree must exercise it, as the musl
 # determinism baseline cannot): definitions and references in .dts/.dtsi
-# files, and DT compatible strings (families B and D).
+# files, and DT compatible strings (families B and D). Beyond the authored
+# testproj fixtures, real Linux v7.3-rc2 material (provenance and licensing
+# in README.adoc): the N800/N810 boards share omap2420-n8x0-common.dtsi
+# over the omap2420 SoC dtsi, and the i2c-cbus-gpio, nokia,retu and
+# regulator-fixed compatible strings each close a real triangle: a C
+# driver match table, a devicetree use and a bindings document.
 #
 # This file is part of Elixir, a source code cross-referencer.
 #
@@ -210,6 +215,125 @@ def test_compatible_dts_only(query):
     assert defs == []
     assert refs == [('arch/arm/boot/dts/testproj-board.dts', '7')]
     assert docs == []
+
+
+# The real n8x0 devicetrees: labels defined in the SoC dtsi are
+# referenced from the shared board dtsi and the board dts files, as
+# phandles (&gpioN inside <...>) and as whole-node references (&mcbsp2)
+def test_ident_dts_label_soci_referenced_by_board_files(query):
+    defs, refs, docs, exists = search(query, 'gpio3', 'D')
+    assert exists
+    assert defs == [('arch/arm/boot/dts/ti/omap/omap2420.dtsi', 112, 'label')]
+    assert refs == [('arch/arm/boot/dts/ti/omap/omap2420-n8x0-common.dtsi', '17,18,19,120')]
+
+    # gpio4 is referenced from two files: the shared dtsi and one board
+    defs, refs, docs, exists = search(query, 'gpio4', 'D')
+    assert exists
+    assert defs == [('arch/arm/boot/dts/ti/omap/omap2420.dtsi', 124, 'label')]
+    assert refs == [('arch/arm/boot/dts/ti/omap/omap2420-n810.dts', '51'),
+                    ('arch/arm/boot/dts/ti/omap/omap2420-n8x0-common.dtsi', '25,121')]
+
+
+def test_ident_dts_label_node_reference(query):
+    # &mcbsp2: a whole-node override of a SoC peripheral in the board dts
+    defs, refs, docs, exists = search(query, 'mcbsp2', 'D')
+    assert exists
+    assert defs == [('arch/arm/boot/dts/ti/omap/omap2420.dtsi', 165, 'label')]
+    assert refs == [('arch/arm/boot/dts/ti/omap/omap2420-n810.dts', '70')]
+
+    # a board-local label referenced only inside its own file
+    defs, refs, docs, exists = search(query, 'v28_aic', 'D')
+    assert exists
+    assert defs == [('arch/arm/boot/dts/ti/omap/omap2420-n810.dts', 17, 'label')]
+    assert refs == [('arch/arm/boot/dts/ti/omap/omap2420-n810.dts', '59,60')]
+
+
+# The multi-family record: one ident with a C definition AND a dts label
+# (the add_family canonical-order case the linux determinism runs found
+# on gpio_clk/i2c0_clk/i2c1_clk; testproj-i2c.dts authors the collision,
+# as struct i2c_dev already exists in the real i2c-dev.c)
+def test_ident_dts_label_and_c_definition(query, testenv):
+    defs, refs, docs, exists = search(query, 'i2c_dev', 'A')
+    assert exists
+    assert defs == [('drivers/i2c/i2c-dev.c', 40, 'struct'),
+                    ('arch/arm/boot/dts/testproj-i2c.dts', 14, 'label')]
+
+    # each family view filters to its own definition
+    defs, _, _, _ = search(query, 'i2c_dev', 'C')
+    assert defs == [('drivers/i2c/i2c-dev.c', 40, 'struct')]
+    defs, refs, _, _ = search(query, 'i2c_dev', 'D')
+    assert defs == [('arch/arm/boot/dts/testproj-i2c.dts', 14, 'label')]
+    assert refs == []
+
+    # the stored record itself carries both families
+    db = data.DB(testenv.data_dir, readonly=True, dtscomp=False)
+    try:
+        assert db.defs.get('i2c_dev').get_families() == ['C', 'D']
+    finally:
+        db.close()
+
+
+# The real compatible-string triangles: defined by a C driver match
+# table, used by the real devicetrees, documented under bindings/ (the
+# CBUS and Retu strings even have TWO documents each: their own binding
+# and the other binding's example)
+def test_compatible_i2c_cbus_gpio(query):
+    defs, refs, docs, exists = search(query, 'i2c-cbus-gpio', 'B')
+    assert exists
+    assert defs == [('drivers/i2c/busses/i2c-cbus-gpio.c', '259', 'compatible')]
+    assert refs == [('arch/arm/boot/dts/ti/omap/omap2420-n8x0-common.dtsi', '16')]
+    assert docs == [('Documentation/devicetree/bindings/i2c/i2c-cbus-gpio.txt', '1,4,15'),
+                    ('Documentation/devicetree/bindings/mfd/retu.txt', '16')]
+
+
+def test_compatible_nokia_retu(query):
+    defs, refs, docs, exists = search(query, 'nokia,retu', 'B')
+    assert exists
+    assert defs == [('drivers/mfd/retu-mfd.c', '310', 'compatible')]
+    assert refs == [('arch/arm/boot/dts/ti/omap/omap2420-n8x0-common.dtsi', '24')]
+    assert docs == [('Documentation/devicetree/bindings/i2c/i2c-cbus-gpio.txt', '24'),
+                    ('Documentation/devicetree/bindings/mfd/retu.txt', '9,19')]
+
+
+def test_compatible_regulator_fixed_yaml(query):
+    # the .yaml side of the bindings mix (the .txt side is above)
+    defs, refs, docs, exists = search(query, 'regulator-fixed', 'B')
+    assert exists
+    assert defs == [('drivers/regulator/fixed.c', '361', 'compatible')]
+    assert refs == [('arch/arm/boot/dts/ti/omap/omap2420-n810.dts', '11,18')]
+    assert docs == [('Documentation/devicetree/bindings/regulator/fixed-regulator.yaml', '53,126')]
+
+
+def test_compatible_driver_and_bindings_without_dts(query):
+    'match-table strings no devicetree in the tree uses'
+    defs, refs, docs, exists = search(query, 'nokia,tahvo', 'B')
+    assert exists
+    assert defs == [('drivers/mfd/retu-mfd.c', '311', 'compatible')]
+    assert refs == []
+    assert docs == [('Documentation/devicetree/bindings/mfd/retu.txt', '9')]
+
+    defs, refs, docs, exists = search(query, 'regulator-fixed-clock', 'B')
+    assert exists
+    assert defs == [('drivers/regulator/fixed.c', '365', 'compatible')]
+    assert refs == []
+    assert docs == [('Documentation/devicetree/bindings/regulator/fixed-regulator.yaml', '25,54,69,70,138')]
+
+
+def test_compatible_board_strings_across_dts(query):
+    'every quoted string of a compatible list, in every board file'
+    defs, refs, docs, exists = search(query, 'nokia,n8x0', 'B')
+    assert exists
+    assert defs == [] and docs == []
+    assert refs == [('arch/arm/boot/dts/ti/omap/omap2420-n800.dts', '8'),
+                    ('arch/arm/boot/dts/ti/omap/omap2420-n810.dts', '8')]
+
+    # the SoC string also appears in the SoC dtsi itself
+    defs, refs, docs, exists = search(query, 'ti,omap2420', 'B')
+    assert exists
+    assert defs == [] and docs == []
+    assert refs == [('arch/arm/boot/dts/ti/omap/omap2420-n800.dts', '8'),
+                    ('arch/arm/boot/dts/ti/omap/omap2420-n810.dts', '8'),
+                    ('arch/arm/boot/dts/ti/omap/omap2420.dtsi', '11')]
 
 
 # Spot-check some files (the perl suite ran `query.py file`; it prints
