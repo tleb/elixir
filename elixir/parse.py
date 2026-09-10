@@ -25,11 +25,17 @@ the list of b"ident type line" lines the shell pipeline printed,
 byte for byte and in the same order (per family: the ctags lines
 first, then the ENTRY scan, then the SYSCALL_DEFINE scan).
 
-ctags stays a subprocess, one per blob as in script.sh; the grep,
-awk and perl around it became Python string ops on bytes. ctags
-needs a real file on disk and keys its parser off the filename, so
-the blob is written to a fresh temp directory under its ORIGINAL
-basename — which is why script.sh copied to $tmp/$opt2.
+ctags stays a subprocess, one invocation per (chunk, family) instead
+of one per blob: with --_xformat the -x output carries the input
+file, so one run can cover a whole chunk, and the per-file output
+comes out in the same order a per-file run printed (name-sorted,
+ties kept in ctags' own order). ctags needs real files on disk and
+keys its parser off the filename, so each blob is written to a fresh
+temp directory under a UNIQUE name that keeps the original
+EXTENSION (the C family has no --language-force; its language comes
+from the name) and reduces everything else to plain ASCII, so ctags'
+%{input} always attributes a line back to its blob. This is why
+script.sh copied to $tmp/$opt2, just shared.
 
 A nonzero ctags exit is tolerated and its stdout used anyway: the
 shell pipelines' exit status came from the last stage, so a failing
@@ -50,22 +56,60 @@ def _shell_lines(data):
         del lines[-1]
     return lines
 
-def _ctags_lines(flags, path):
-    '''ctags -x cross-reference lines of path; the flags come as the
-    subprocess argument list (the shell's quotes never reached ctags)'''
-    p = subprocess.run((b'ctags', b'-x') + flags + (path,),
-                       stdout=subprocess.PIPE)
-    # The exit status is ignored: the pipelines swallowed it too
-    return _shell_lines(p.stdout)
+# One ctags -x run for a whole chunk. The plain -x line
+# "name kind line input ..." carries the input file as its fourth
+# column, printed exactly as passed, so one run can cover a whole
+# chunk and every line still attributes back to its blob (--_xformat
+# and --output-format=json are out: both sort equal names by the line
+# number as a STRING, where the -x path keeps them in parser-creation
+# order; json under -x even drops the line number). Every temp name is
+# reduced to plain ASCII without whitespace, so no column can ever
+# hold a separator or a shifted field can look like a path.
+_TEMP_SAFE = re.compile(rb'[^A-Za-z0-9._-]')
 
-# parse_defs_C's grep -avE -e '^operator ' -e '^CONFIG_': drop the
-# operator overloads (name "operator ...") and config macros
-_OPERATOR_OR_CONFIG = re.compile(rb'^operator |^CONFIG_')
+def _temp_name(i, filename):
+    '''Unique temp basename for blob #i of the chunk: the original
+    extension kept (ctags keys the C family's language off it), the
+    rest reduced to safe ASCII'''
+    stem, dot, suffix = filename.rpartition(b'.')
+    if not dot:
+        stem, suffix = filename, b''
+    stem = _TEMP_SAFE.sub(b'_', stem)[:200]
+    if dot:
+        dot += _TEMP_SAFE.sub(b'_', suffix)[:48]
+    return b'%d-%s%s' % (i, stem, dot)
 
-# parse_defs_C's perl one-liners for .S files; ^ anchors like the
-# shell's, \w and \W are [A-Za-z0-9_] and its complement on bytes
-_ENTRY = re.compile(rb'\s*ENTRY\((\w+)\)')
-_SYSCALL_DEFINE = re.compile(rb'SYSCALL_DEFINE[0-9]\(\s*(\w+)\W')
+def _chunk_ctags(flags, entries):
+    '''One ctags invocation for a chunk of (key, blob, filename)
+    entries: every blob written under its temp name, ctags run once,
+    the output attributed by the input column. Returns {key: [-x
+    lines]}, in ctags' output order; a blob ctags said nothing about
+    is simply missing from the map, and a line whose fourth column is
+    not one of the paths (an empty name shifts the columns) belongs
+    to no blob and is dropped'''
+    tmp = tempfile.mkdtemp()
+    try:
+        keys_by_path = {}
+        paths = []
+        for key, blob, filename in entries:
+            path = os.path.join(os.fsencode(tmp), _temp_name(key, filename))
+            with open(path, 'wb') as f:
+                f.write(blob)
+            keys_by_path[path] = key
+            paths.append(path)
+        p = subprocess.run((b'ctags', b'-x') + flags + tuple(paths),
+                           stdout=subprocess.PIPE)
+        # The exit status is ignored: the pipelines swallowed it too
+        lines = {}
+        for line in _shell_lines(p.stdout):
+            fields = line.split(None, 4)
+            if len(fields) > 3:
+                key = keys_by_path.get(fields[3])
+                if key is not None:
+                    lines.setdefault(key, []).append(line)
+        return lines
+    finally:
+        shutil.rmtree(tmp)
 
 def _awk123(lines, prefix=b''):
     '''awk '{print "<prefix>"$1" "$2" "$3}': the first three
@@ -78,6 +122,15 @@ def _awk123(lines, prefix=b''):
         out.append(prefix + b' '.join(fields))
     return out
 
+# parse_defs_C's perl one-liners for .S files; ^ anchors like the
+# shell's, \w and \W are [A-Za-z0-9_] and its complement on bytes.
+# parse_defs_C's grep -avE -e '^operator ' -e '^CONFIG_' drops the
+# operator overloads (name "operator ...") and config macros
+_OPERATOR_OR_CONFIG = re.compile(rb'^operator |^CONFIG_')
+
+_ENTRY = re.compile(rb'\s*ENTRY\((\w+)\)')
+_SYSCALL_DEFINE = re.compile(rb'SYSCALL_DEFINE[0-9]\(\s*(\w+)\W')
+
 def _scan(blob, pattern, prefix=b''):
     '''One perl -ne scan over the blob: pattern matched at the start
     of every line, printing "<prefix>$1 function $." per match'''
@@ -89,30 +142,53 @@ def _scan(blob, pattern, prefix=b''):
                        str(lineno).encode('ascii'))
     return out
 
-def _defs_C(blob, path):
+def _defs_C(blob, lines):
     #   ctags -x --kinds-c=+p+x --extras='-{anonymous}' "$full_path" |
     #   grep -avE -e '^operator ' -e '^CONFIG_' |
     #   awk '{print $1" "$2" "$3}'
-    lines = _ctags_lines((b'--kinds-c=+p+x', b'--extras=-{anonymous}'), path)
     lines = [l for l in lines if not _OPERATOR_OR_CONFIG.search(l)]
     return (_awk123(lines)
             + _scan(blob, _ENTRY)
             + _scan(blob, _SYSCALL_DEFINE, b'sys_'))
 
-def _defs_K(blob, path):
+def _defs_K(blob, lines):
     #   ctags -x --language-force=kconfig --kinds-kconfig=c
     #        --extras-kconfig=-{configPrefixed} "$full_path" |
     #   awk '{print "CONFIG_"$1" "$2" "$3}'
-    return _awk123(_ctags_lines(
-        (b'--language-force=kconfig', b'--kinds-kconfig=c',
-         b'--extras-kconfig=-{configPrefixed}'), path), b'CONFIG_')
+    return _awk123(lines, b'CONFIG_')
 
-def _defs_D(blob, path):
+def _defs_D(blob, lines):
     #   ctags -x --language-force=dts "$full_path" |
     #   awk '{print $1" "$2" "$3}'
-    return _awk123(_ctags_lines((b'--language-force=dts',), path))
+    return _awk123(lines)
 
+# The shell case's per-family ctags flags, keyed as update.py hands
+# the families over (as str)
 _PARSERS = {'C': _defs_C, 'K': _defs_K, 'D': _defs_D}
+_DEFS_FLAGS = {
+    'C': (b'--kinds-c=+p+x', b'--extras=-{anonymous}'),
+    'K': (b'--language-force=kconfig', b'--kinds-kconfig=c',
+          b'--extras-kconfig=-{configPrefixed}'),
+    'D': (b'--language-force=dts',),
+}
+
+def parse_defs_chunk(items):
+    '''parse_defs for a chunk of (blob, filename, family) triples: one
+    ctags per (chunk, family) instead of one per blob, everything
+    else per blob as before. Returns the per-blob line lists, in the
+    input order'''
+    out = [[] for _ in items]
+    groups = {}
+    for i, (blob, filename, family) in enumerate(items):
+        if family in _PARSERS:
+            if not isinstance(filename, bytes):
+                filename = os.fsencode(filename)
+            groups.setdefault(family, []).append((i, blob, filename))
+    for family, entries in groups.items():
+        lines = _chunk_ctags(_DEFS_FLAGS[family], entries)
+        for i, blob, filename in entries:
+            out[i] = _PARSERS[family](blob, lines.get(i, ()))
+    return out
 
 def parse_defs(blob, filename, family):
     '''The b"ident type line" lines script.sh parse-defs printed for
@@ -120,20 +196,7 @@ def parse_defs(blob, filename, family):
     basename (ctags keys its language off it; update.py hands it over
     as str, script.sh passed it through argv unchanged), family one
     of C, K, D; other families printed nothing, like the shell case'''
-    defs = _PARSERS.get(family)
-    if defs is None:
-        return []
-    if not isinstance(filename, bytes):
-        filename = os.fsencode(filename)
-
-    tmp = tempfile.mkdtemp()
-    try:
-        path = os.path.join(os.fsencode(tmp), filename)
-        with open(path, 'wb') as f:
-            f.write(blob)
-        return defs(blob, path)
-    finally:
-        shutil.rmtree(tmp)
+    return parse_defs_chunk([(blob, filename, family)])[0]
 
 '''Port of find-file-doc-comments.pl (script.sh parse-docs): the
 b"ident line" lines the perl printed for the blob, associating
@@ -163,14 +226,8 @@ _DOC_STARTS_IDENT = re.compile(rb'^[a-z_]', re.IGNORECASE)
 # $'s, like perl's, also match just before it
 _DOC_OPENER = re.compile(rb'^' + _H + rb'*/\*\*(?:' + _H + rb'|$)')
 
-def _doc_comments(blob, path):
-    lines = _ctags_lines((b'--c-kinds=+p-m', b'--language-force=C'), path)
-    lines = [l for l in lines if not l.startswith(b'operator ')]
-    lines = _awk123(lines)
-
-    # Index definitions by line, not by name: multiple definitions can
-    # share a name (#186), and the last one ctags reported on a line
-    # wins
+def _doc_comments(blob, lines):
+    # lines: the blob's awk123 b"name kind line" lines
     definition_lines = {}
     definition_types = {}
     for line in lines:
@@ -249,17 +306,34 @@ def _doc_comments(blob, path):
         out += [name + b' ' + b'%d' % lineno for lineno in linenos]
     return out
 
+# The perl's ctags flags, chunked like parse_defs'. --language-force=C
+# makes the temp names' extensions irrelevant
+_DOCS_FLAGS = (b'--c-kinds=+p-m', b'--language-force=C')
+
+def parse_doc_comments_chunk(blobs):
+    '''parse_doc_comments for a chunk of blobs: the b"/\*\*" gate first
+    (a doc comment needs an opener, and 80% of kernel C/H files have
+    none at all, so most blobs never reach ctags), then ONE ctags for
+    the chunk's survivors. The ^operator grep happened before the
+    maps, as in the perl. Returns the per-blob line lists, in the
+    input order'''
+    out = [[] for _ in blobs]
+    entries = [(i, blob, b'') for i, blob in enumerate(blobs)
+               if b'/**' in blob]
+    if not entries:
+        return out
+    lines = _chunk_ctags(_DOCS_FLAGS, entries)
+    for i, blob, _ in entries:
+        blob_lines = [l for l in lines.get(i, ())
+                      if not l.startswith(b'operator ')]
+        out[i] = _doc_comments(blob, _awk123(blob_lines))
+    return out
+
 def parse_doc_comments(blob):
     '''The b"ident line" lines find-file-doc-comments.pl printed for
     the blob: same bytes. The ident is the documented definition's
-    name, the line the /** opener's line. One ctags subprocess, run on
-    a temp copy of the blob as the perl was (through script.sh's
-    mktemp); --language-force=C made the temp name irrelevant, so any
-    mkstemp file serves'''
-    fd, path = tempfile.mkstemp()
-    try:
-        with os.fdopen(fd, 'wb') as f:
-            f.write(blob)
-        return _doc_comments(blob, os.fsencode(path))
-    finally:
-        os.unlink(path)
+    name, the line the /** opener's line. One ctags subprocess for the
+    chunk, run on temp copies of the blobs as the perl was (through
+    script.sh's mktemp); --language-force=C made the temp names
+    irrelevant, so any unique name serves'''
+    return parse_doc_comments_chunk([blob])[0]
