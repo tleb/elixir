@@ -226,6 +226,65 @@ _DOC_STARTS_IDENT = re.compile(rb'^[a-z_]', re.IGNORECASE)
 # $'s, like perl's, also match just before it
 _DOC_OPENER = re.compile(rb'^' + _H + rb'*/\*\*(?:' + _H + rb'|$)')
 
+# The three name-free skip shapes (an empty line, the end of a
+# comment, a comment continuation) and the header's shape, all
+# compiled once. The original patterns embedded every definition's
+# NAME as a literal, and compiling those was nearly the whole scan
+# cost; matching the shape once and comparing the captured name
+# instead (a C identifier is exactly \w+, so the capture can only be
+# the name the literal version matched - the terminator the patterns
+# require after it rules out a prefix) is the same match at a
+# fraction of the work. A name that is not a plain \w+ never comes
+# out of ctags for these languages, but the per-name compile below
+# still covers one if it ever does. The bare/qualified pair is the
+# pattern's optional struct/enum/union/typedef prefix made explicit:
+# the named pattern could match with the prefix left unmatched (" *
+# struct foo" IS a header for struct), and only trying both shapes
+# compares against the same positions
+_SKIP_EMPTY = re.compile(rb'^' + _H + rb'*$')
+_SKIP_END = re.compile(rb'^' + _H + rb'+\*/')
+_SKIP_CONT = re.compile(rb'^' + _H + rb'+\*(?:' + _H + rb'|$)')
+_HEADER_BARE = re.compile(rb'^' + _H + rb'+\*' + _H + rb'+(\w+)'
+                          rb'(?:' + _H + rb'|\(|:|$)')
+_HEADER_QUAL = re.compile(rb'^' + _H + rb'+\*' + _H + rb'+'
+                          rb'(?:(?:struct|enum|union|typedef)'
+                          + _H + rb'+)?(\w+)'
+                          rb'(?:' + _H + rb'|\(|:|$)')
+# The function walk-back's "name at line start" check, same trick
+_NAME_START = re.compile(rb'^' + _H + rb'*(\w+)\b')
+_WORD = re.compile(rb'\w+\Z')
+
+def _def_patterns(name):
+    '''The per-definition matches as (header, skip, starts_name)
+    callables: shape matches plus captured-name comparison for a
+    plain \w+ name (the whole cost used to be compiling these), the
+    perl's own per-name patterns otherwise'''
+    if _WORD.fullmatch(name):
+        def header(line, bare=_HEADER_BARE, qual=_HEADER_QUAL, n=name):
+            m = bare.match(line)
+            if m is not None and m.group(1) == n:
+                return True
+            m = qual.match(line)
+            return m is not None and m.group(1) == n
+        def skip(line, empty=_SKIP_EMPTY, end=_SKIP_END, cont=_SKIP_CONT,
+                 header=header):
+            return bool(empty.match(line) or end.match(line)
+                        or cont.match(line) or header(line))
+        def starts_name(line, start=_NAME_START, n=name):
+            m = start.match(line)
+            return m is not None and m.group(1) == n
+        return header, skip, starts_name
+
+    header_src = (_H + rb'+\*' + _H + rb'+(?:(?:struct|enum|union|typedef)'
+                  + _H + rb'+)?' + re.escape(name)
+                  + rb'(?:' + _H + rb'|\(|:|$)')
+    header_rx = re.compile(rb'^' + header_src)
+    skip_rx = re.compile(rb'^(?:' + _H + rb'*$|' + _H + rb'+\*/|'
+                         + _H + rb'+\*(?:' + _H + rb'|$)|'
+                         + header_src + rb')')
+    starts_rx = re.compile(rb'^' + _H + rb'*' + re.escape(name) + rb'\b')
+    return header_rx.match, skip_rx.match, starts_rx.match
+
 def _doc_comments(blob, lines):
     # lines: the blob's awk123 b"name kind line" lines
     definition_lines = {}
@@ -245,24 +304,32 @@ def _doc_comments(blob, lines):
 
     doc_comments = {}
 
-    for lineno in range(len(source_lines) - 1, 0, -1):
+    # The perl walked every line of the file and looked each one up
+    # in the maps; walking only the definition lines visits the same
+    # definitions in the same newest-first order and costs work
+    # proportional to the definitions, not to the file. A key the
+    # walk could never have looked up - a line number ctags did not
+    # print as a plain decimal, or one beyond the file's last line -
+    # is dead and skipped, as the lookups always skipped it
+    last_lineno = len(source_lines) - 1
+    linenos = sorted((int(key) for key in definition_lines
+                      if key.isdigit() and key != b'0'
+                      and key == b'%d' % int(key)
+                      and int(key) <= last_lineno), reverse=True)
+
+    # The per-definition patterns only depend on the definition's
+    # name, so one name builds them once however often it is defined
+    patterns = {}
+
+    for lineno in linenos:
         key = b'%d' % lineno
-        if key not in definition_lines:
-            continue
         definition_name = definition_lines[key]
         definition_type = definition_types[key]
 
-        # Comment header: be liberal in what we accept. For example,
-        # do not check the type of the definition/declaration against
-        # the type in the comment header.
-        #   ^\h+\*\h+(?:(?:struct|enum|union|typedef)\h+)?NAME(?:\h|\(|:|$)
-        header_src = (_H + rb'+\*' + _H + rb'+(?:(?:struct|enum|union|typedef)'
-                      + _H + rb'+)?' + re.escape(definition_name)
-                      + rb'(?:' + _H + rb'|\(|:|$)')
-        header = re.compile(rb'^' + header_src)
-        skip = re.compile(rb'^(?:' + _H + rb'*$|' + _H + rb'+\*/|'
-                          + _H + rb'+\*(?:' + _H + rb'|$)|'
-                          + header_src + rb')')
+        this = patterns.get(definition_name)
+        if this is None:
+            this = patterns[definition_name] = _def_patterns(definition_name)
+        header, skip, starts_name = this
 
         # Make sure we get back past the first line of multiline
         # definitions
@@ -271,8 +338,7 @@ def _doc_comments(blob, lines):
                 lineno -= 1
         elif definition_type == b'function':
             # Try to handle the case of "int\nfoo()"
-            if re.match(rb'^' + _H + rb'*' + re.escape(definition_name)
-                        + rb'\b', source_lines[lineno]):
+            if starts_name(source_lines[lineno]):
                 while lineno and _DOC_STARTS_IDENT.match(source_lines[lineno]):
                     lineno -= 1
 
@@ -283,12 +349,12 @@ def _doc_comments(blob, lines):
 
         # Find the last line that could be a doc-comment header for
         # this function
-        while lineno and skip.match(source_lines[lineno]):
+        while lineno and skip(source_lines[lineno]):
             lineno -= 1
         lineno += 1  # We may have just skipped past the header itself
 
         # Is it actually a header for this function?
-        if not header.match(source_lines[lineno]):
+        if not header(source_lines[lineno]):
             continue
 
         # We have found a header. Confirm it's a doc comment.
