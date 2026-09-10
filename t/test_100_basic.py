@@ -36,6 +36,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from conftest import TAG
@@ -115,6 +116,93 @@ def test_update_cleans_stale_marker(build_env, tmp_path):
     assert result.returncode == 0, result.stdout
     assert '0 new tags' in result.stdout
     assert not list(Path(env.data_dir).glob('tmp-blobwalk-*'))
+
+
+# The consistency check: a SIGKILL mid-phase-1 flushes an arbitrary
+# subset of blob/hash/file records (one cache per handle), so unequal
+# counts must become a refusal, not a rerun on top of a partial blob
+# registration. Deleting one hash record models the smallest such
+# subset; the message must say inconsistent, not interrupted (that
+# path means a live currentTag marker)
+def test_update_refuses_inconsistent_data_dir(build_env, tmp_path):
+    env = build_env(tmp_path)
+    from elixir import data
+    db = data.DB(env.data_dir, readonly=False, shared=True, dtscomp=False)
+    db.hash.delete(db.hash.get_keys()[0])
+    db.close()
+
+    result = update(env)
+    assert result.returncode != 0, result.stdout
+    assert 'inconsistent' in result.stdout
+    assert 'interrupted run' not in result.stdout
+
+
+# numBlobs absent means phase 1 never completed once: blob records
+# without it would make a rerun reassign idx numbers from 0 over live
+# records, so that state must refuse too, not just mismatched counts
+def test_update_refuses_blobs_without_numblobs(build_env, tmp_path):
+    env = build_env(tmp_path)
+    from elixir import data
+    db = data.DB(env.data_dir, readonly=False, shared=True, dtscomp=False)
+    db.vars.delete('numBlobs')
+    db.close()
+
+    result = update(env)
+    assert result.returncode != 0, result.stdout
+    assert 'inconsistent' in result.stdout
+
+
+# The durability property end to end: whatever wall offset a SIGKILL
+# lands on, the next start must either refuse the data directory
+# (currentTag marker or consistency check) or run to completion with
+# a database byte-identical to a clean run's — never a third
+# outcome. Offsets span the whole run so kills land in the walk, each
+# tag's phases, the commit boundaries and the exit path; the dump
+# comparison is what catches a kill between one tag's commit and the
+# next tag's boundary sync, whose signature is a tag committed
+# without the defs a rerun then skips writing
+def test_update_sigkill_rerun_refuse_or_completes(build_env, tmp_path):
+    env = build_env(tmp_path)
+    git = ['git', '-C', str(env.repo_dir), '-c', 'user.name=test',
+           '-c', 'user.email=test']
+    for i in (2, 3, 4): # more tags, so phases 3-5 occupy more of the run
+        (Path(env.repo_dir) / ('extra%d.c' % i)).write_text('int v%d;\n' % i)
+        subprocess.run(git + ['add', '.'], check=True)
+        subprocess.run(git + ['commit', '-m', 'tag %d' % i], check=True)
+        subprocess.run(git + ['tag', 'v5.%d' % (i + 3)], check=True)
+
+    def dump():
+        return subprocess.run(
+            [sys.executable, str(REPO_ROOT / 'utils' / 'dump.py'), '--dtscomp', '1'],
+            env=env.env(), cwd=REPO_ROOT,
+            stdout=subprocess.PIPE).stdout
+
+    # The clean 4-tag reference: index from scratch, then dump
+    shutil.rmtree(env.data_dir)
+    os.mkdir(env.data_dir)
+    assert update(env).returncode == 0
+    reference = dump()
+
+    for offset in (0.05, 0.1, 0.2, 0.4, 0.7, 1.1, 1.6, 2.3):
+        shutil.rmtree(env.data_dir)
+        os.mkdir(env.data_dir)
+        proc = subprocess.Popen(
+            [sys.executable, str(REPO_ROOT / 'update.py'), '4'],
+            env=env.env(), cwd=REPO_ROOT,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(offset)
+        if proc.poll() is None:
+            proc.kill() # SIGKILL: what BDB's cache cannot survive
+        proc.wait()
+
+        result = update(env)
+        refused = (result.returncode != 0
+                   and ('interrupted run' in result.stdout
+                        or 'inconsistent' in result.stdout))
+        assert refused or result.returncode == 0, (
+            'offset %s: %s' % (offset, result.stdout))
+        if result.returncode == 0:
+            assert dump() == reference, 'offset %s: silent corruption' % offset
 
 
 # Leftovers of a crashed run's upfront walk are swept at startup, and
