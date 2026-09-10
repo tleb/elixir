@@ -42,9 +42,10 @@
 # Phases are sequential: a phase starts only after the previous one
 # finished, so data written by one phase is visible to the next without
 # locking. Inside a phase, work units (chunks of blobs) run in a thread
-# pool; refs lexes in a process pool instead (pure Python, GIL-bound),
-# forked once at startup while the parent is still small, because fork
-# cost grows with the parent's page tables as the caches fill. The databases are opened with DB_THREAD, so plain concurrent
+# pool; refs and docs lex/scan in a process pool instead (pure Python,
+# GIL-bound), forked once at startup while the parent is still small,
+# because fork cost grows with the parent's page tables as the caches
+# fill. The databases are opened with DB_THREAD, so plain concurrent
 # accesses are safe; only read-modify-write cycles on a key are not, and
 # each has a dedicated lock, held around the cycle only, never around
 # lexing or subprocess calls.
@@ -86,7 +87,6 @@ defs_keys = set() # idents known to db.defs, snapshotted before the refs phase
 
 # Guards for read-modify-write cycles on database keys:
 defs_lock = Lock() # db.defs
-docs_lock = Lock() # db.docs
 refs_lock = Lock() # db.refs
 comps_lock = Lock() # db.comps
 comps_docs_lock = Lock() # db.comps_docs
@@ -296,24 +296,40 @@ def update_references(triple_chunks):
         if done % 10 == 0: progress('refs: chunk %d/%d' % (done, total))
 
 
-def update_doc_comments(idxs):
-    for idx in idxs:
-        if idx % 1000 == 0: progress('docs: ' + str(idx))
-
-        hash = db.hash.get(idx)
-        filename = db.file.get(idx)
-
+def _docs_chunk(triples):
+    '''Docs work for one chunk of (idx, filename, hash), in a pool
+    worker: the /** gate, the temp files, one chunked ctags and the
+    scan. Workers carry no per-tag state, like the refs workers; the
+    blob is fetched through the worker's own batch reader. Returns
+    (idx, family, lines) per parsed blob'''
+    metas = []
+    blobs = []
+    for idx, filename, hash in triples:
         family = lib.getFileFamily(filename)
         if family in [None, 'M']: continue
 
-        # Doc comments for the whole blob (parse.parse_doc_comments),
-        # fetched through the batch reader
-        lines = parse.parse_doc_comments(repo.get_blob(hash))
-        for l in lines:
-            ident, line = l.split(b' ')
-            line = int(line.decode())
+        metas.append((idx, family))
+        blobs.append(repo.get_blob(hash))
 
-            with docs_lock:
+    lines = parse.parse_doc_comments_chunk(blobs)
+    return [(idx, family, out) for (idx, family), out in zip(metas, lines)]
+
+def update_doc_comments(triple_chunks):
+    '''Doc comments in the pool forked at startup, like refs: the scan
+    around the ctags output is pure Python and GIL-bound, so it runs
+    in process workers while the pool idles between the defs and
+    refs phases (the ctags waits release the GIL, which is why defs
+    stays on threads). Results arrive in chunk order, so the writes
+    are deterministic and single-threaded (no docs_lock needed,
+    like refs).'''
+    done = 0
+    total = len(triple_chunks)
+    for chunk in refs_pool.imap(_docs_chunk, triple_chunks):
+        for idx, family, lines in chunk:
+            for l in lines:
+                ident, line = l.split(b' ')
+                line = int(line.decode())
+
                 if db.docs.exists(ident):
                     obj = db.docs.get(ident)
                 else:
@@ -321,6 +337,8 @@ def update_doc_comments(idxs):
 
                 obj.append(idx, str(line), family)
                 db.docs.put(ident, obj)
+        done += 1
+        if done % 10 == 0: progress('docs: chunk %d/%d' % (done, total))
 
 
 def update_compatibles(idxs):
@@ -466,7 +484,8 @@ def index_tag(tag):
     # Phase 3: definitions, doc comments, compatibles
     work = list(chunks(idxes))
     parallel(update_definitions, work)
-    parallel(update_doc_comments, work)
+    update_doc_comments([[(idx, db.file.get(idx), db.hash.get(idx))
+                          for idx in chunk] for chunk in work])
     if dts_comp_support:
         parallel(update_compatibles, work)
 
