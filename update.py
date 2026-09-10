@@ -81,6 +81,7 @@ from sys import argv
 from threading import Lock
 
 from elixir.lexers import TokenType
+from elixir.lexers.fastscan import get_scanner
 from elixir import repo
 from elixir import parse
 import elixir.lib as lib
@@ -337,6 +338,11 @@ def _refs_lex_chunk(triples):
     happens in the parent, which owns the defs state. Error tokens are
     counted and sampled here, never printed: pool processes do not
     write to the log.
+
+    The C, Kconfig and makefile families lex through the fast
+    scanners (elixir/lexers/fastscan.py), which emit exactly what the
+    simple_lexer-based lexers emit for identifiers, errors and samples;
+    everything else (DTS, gas) keeps the lexer objects.
     '''
     out = []
     errors = 0
@@ -347,14 +353,25 @@ def _refs_lex_chunk(triples):
         family = lib.getFileFamily(os.path.basename(filename))
         if family == None: continue
 
-        lexer = get_lexer(filename, project)
-        if lexer is None:
-            continue
+        scanner = get_scanner(filename, project)
+        if scanner is None:
+            lexer = get_lexer(filename, project)
+            if lexer is None:
+                continue
 
         try:
             code = repo.get_blob(hash).decode()
         except UnicodeDecodeError:
             code = repo.get_blob(hash).decode('raw_unicode_escape')
+
+        if scanner is not None:
+            idents, chunk_errors, error_tokens = scanner(
+                code, max_samples - len(samples))
+            errors += chunk_errors
+            samples.extend((token, filename, line)
+                           for token, line in error_tokens)
+            out.append((idx, family, idents))
+            continue
 
         prefix = b''
         # Kconfig values are saved as CONFIG_<value>

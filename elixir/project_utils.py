@@ -65,12 +65,13 @@ project_lexers = {
     }),
 }
 
-# Returns a lexer for given file path under a given project, or None
-# if no lexer matches. Only files that have a family per
-# lib.getFileFamily(basename) can get a lexer; the kconfig/makefile
-# name rules in the tables above therefore never see .rst files,
-# which getFileFamily excludes.
-def get_lexer(path: str, project_name: str):
+# Returns the lexer a path resolves to, or None if no lexer matches:
+# the (class or (class, kwargs)) table entry itself, so callers can
+# dispatch on it. Only files that have a family per lib.getFileFamily
+# (basename) can get a lexer; the kconfig/makefile name rules in the
+# tables above therefore never see .rst files, which getFileFamily
+# excludes.
+def get_lexer_class(path: str, project_name: str):
     if lib.getFileFamily(os.path.basename(path)) is None:
         return None
 
@@ -80,9 +81,16 @@ def get_lexer(path: str, project_name: str):
     name = path.rsplit('/', 1)[-1]
     for regex, lexer in lexers.items():
         if re.match(regex, name) or re.match(regex, path):
-            if type(lexer) == tuple:
-                lexer_cls, kwargs = lexer
-                return lambda code: lexer_cls(code, **kwargs)
-            else:
-                return lambda code: lexer(code)
+            return lexer
     return None
+
+# Returns a lexer for given file path under a given project, or None
+# if no lexer matches.
+def get_lexer(path: str, project_name: str):
+    lexer = get_lexer_class(path, project_name)
+    if lexer is None:
+        return None
+    if type(lexer) == tuple:
+        lexer_cls, kwargs = lexer
+        return lambda code: lexer_cls(code, **kwargs)
+    return lambda code: lexer(code)
