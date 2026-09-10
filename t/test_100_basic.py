@@ -123,6 +123,17 @@ def update(env):
 # SUMMARY JSON line at the end
 def test_update_log_format(build_env, tmp_path):
     env = build_env(tmp_path)
+    # Three more tags with fresh blobs each, so a (3/4) tag line
+    # exists to pin the run-ETA clause: it needs three completed tags
+    # and at least one tag left to go
+    git = ['git', '-C', str(env.repo_dir), '-c', 'user.name=test',
+           '-c', 'user.email=test']
+    for i in (2, 3, 4):
+        (Path(env.repo_dir) / ('extra%d.c' % i)).write_text('int v%d;\n' % i)
+        subprocess.run(git + ['add', '.'], check=True)
+        subprocess.run(git + ['commit', '-m', 'tag %d' % i], check=True)
+        subprocess.run(git + ['tag', 'v5.%d' % (i + 3)], check=True)
+
     # Re-index from scratch with the output captured: build_env's
     # own update.py run happened before the fixture returned its env
     shutil.rmtree(env.data_dir)
@@ -132,21 +143,31 @@ def test_update_log_format(build_env, tmp_path):
     assert result.returncode == 0, result.stdout
 
     # Run start line: timestamp, project, tag count
-    assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj: 1 new tags \(repo .+, data .+, 4 threads\)$',
+    assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj: 4 new tags \(repo .+, data .+, 4 threads\)$',
                      result.stdout, re.M), result.stdout
 
-    # Tag line: timestamp, project tag (n/N), blobs, seconds, phases
-    assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj v5\.4 \(1/1\): '
+    # Tag line: timestamp, project tag (n/N), blobs, seconds, phases.
+    # With fewer than 3 completed tags (and on the last tag) the line
+    # ends after the phases: nothing rate-derived is shown yet
+    assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj v5\.4 \(1/4\): '
                      r'\d+ blobs, \S+ \(defs \S+ docs \S+ comps \S+ refs \S+ comps_docs \S+\)$',
+                     result.stdout, re.M), result.stdout
+
+    # From the third completed tag on, the blob-denominated run ETA:
+    # median blobs per tag, cumulative rate, ETA
+    assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj v5\.6 \(3/4\): '
+                     r'\d+ blobs, \S+ \(defs \S+ docs \S+ comps \S+ refs \S+ comps_docs \S+\)'
+                     r' — ~\d+ b/tag, \d+ blobs/s, ETA \S+$',
                      result.stdout, re.M), result.stdout
 
     # The machine line parses as JSON with every phase
     line = next(l for l in result.stdout.splitlines() if 'SUMMARY {' in l)
     summary = json.loads(line.split('SUMMARY ', 1)[1])
     assert summary['project'] == 'testproj'
-    assert summary['tags'] == 1
+    assert summary['tags'] == 4
     assert summary['blobs'] > 0
     assert summary['wall_s'] > 0
+    assert summary['blobs_per_s'] > 0
     assert set(summary['phases']) == {'ids', 'vers', 'defs', 'docs', 'comps',
                                      'refs', 'comps_docs'}
     assert summary['phases']['defs'] > 0
@@ -155,8 +176,9 @@ def test_update_log_format(build_env, tmp_path):
     assert isinstance(summary['ctags_notices'], int)
 
     # t/tree phases are all faster than the 5 s progress interval:
-    # no in-phase progress lines, only one line per tag
-    assert 'blobs/s' not in result.stdout
+    # no in-phase progress lines (percent-done blobs counters), only
+    # one line per tag plus the final summary lines
+    assert not re.search(r'\d+% \d+/\d+ blobs', result.stdout)
 
 
 def current_tag_marker(env, tag):

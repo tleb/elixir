@@ -66,8 +66,10 @@ import multiprocessing
 import os
 import sys
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from statistics import median
 from sys import argv
 from threading import Lock
 
@@ -661,29 +663,32 @@ def index_tag(tag):
 
 done_tags = 0
 done_blobs = 0
-tag_seconds = 0.0
+tag_blobs = deque(maxlen=10) # blobs of the last completed tags, for the median
 
 for tag in tag_buf:
     times, blobs = index_tag(tag)
     done_tags += 1
     done_blobs += blobs
-    tag_seconds += sum(times.values())
+    tag_blobs.append(blobs)
 
-    # Tag completion line with per-phase seconds and, once a rate
-    # exists, the run's average pace and ETA (average seconds per
-    # completed tag times the tags left — tag count, not blob
-    # weighted; approximate, like every ETA)
+    # Tag completion line with per-phase seconds and, once three tags
+    # have completed (before that there is no honest rate), the run's
+    # blob-denominated pace and ETA: remaining tags times the median
+    # blobs of the last 10 tags, over the cumulative blobs-per-second
+    # — blob counts, not tag averages, because tag sizes are skewed
+    # (the first tags carry most of the corpus); the median, not the
+    # mean, because a fat tag or a big merge must not skew it either
     msg = ('%s %s (%d/%d): %d blobs, %s (%s)'
            % (project, tag.decode(), done_tags, num_tags, blobs,
               fmt_secs(sum(times.values())),
               ' '.join('%s %s' % (p, fmt_secs(times[p]))
                        for p in ('defs', 'docs', 'comps', 'refs', 'comps_docs')
                        if p in times)))
-    if done_tags < num_tags:
-        avg = tag_seconds / done_tags
-        msg += ' — avg %s/tag' % fmt_secs(avg)
-        if done_tags >= 2:
-            msg += ', ETA ' + fmt_eta(avg * (num_tags - done_tags))
+    if 3 <= done_tags < num_tags:
+        rate = done_blobs / (time.monotonic() - run_start)
+        med = median(tag_blobs)
+        msg += ' — ~%d b/tag, %d blobs/s, ETA %s' % (
+            med, rate, fmt_eta((num_tags - done_tags) * med / rate))
     log(msg)
 
 refs_pool.terminate()
@@ -720,6 +725,7 @@ log('SUMMARY ' + json.dumps({
     'tags': num_tags,
     'blobs': done_blobs,
     'wall_s': round(wall, 3),
+    'blobs_per_s': round(done_blobs / wall, 3),
     'phases': {p: round(run_phase_s[p], 3) for p in phases},
     'lexer_errors': lexer_errors,
     'ctags_notices': ctags_notices,
