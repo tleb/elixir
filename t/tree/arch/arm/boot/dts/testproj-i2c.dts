@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Authored testproj fixture (not from Linux): the i2c_dev label below
+ * makes "i2c_dev" an ident defined in two file families at once —
+ * struct i2c_dev in drivers/i2c/i2c-dev.c (C) and this label (D). That
+ * is the multi-family definitions.db record (the add_family canonical-
+ * order case the linux determinism runs hit on gpio_clk/i2c0_clk/
+ * i2c1_clk), which the real files never produce by themselves.
+ */
+
+/dts-v1/;
+
+/ {
+	i2c_dev: i2c@1 {
+		#address-cells = <1>;
+		#size-cells = <0>;
+	};
+};

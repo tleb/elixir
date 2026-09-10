@@ -223,18 +223,33 @@ From the top-level Elixir directory, run:
 
  python3 -m pytest t/
 
-The test suite uses code extracted from Linux v5.4 in `t/tree`.
+The test suite uses code extracted from Linux v5.4 and Linux v7.3-rc2 in
+`t/tree`.  The v7.3-rc2 files (the `omap2420-n8x0*` devicetrees, the
+`i2c-cbus-gpio`, `retu-mfd` and `fixed` drivers, and the DT binding
+documents for them) form a coherent set: the `i2c-cbus-gpio`, `nokia,retu`
+and `regulator-fixed` compatible strings appear in all three roles —
+defined in C drivers, used in devicetrees, documented in bindings.
 
 == Licensing of code in `t/tree`
 
 The copied code is licensed as described in the https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/COPYING[COPYING] file included with
-Linux.  All the files copied carry SPDX license identifiers of `GPL-2.0+` or
+Linux.  The v5.4 files all carry SPDX license identifiers of `GPL-2.0+` or
 `GPL-2.0-or-later`.  Per https://www.gnu.org/licenses/gpl-faq.en.html#AllCompatibility[GNU's compatibility table], GPL 2.0+ code can be used
 under GPLv3 provided the combination is under GPLv3.  Moreover, https://www.gnu.org/licenses/license-list.en.html#AGPLv3.0[GNU's overview
 of AGPLv3] indicates that its terms "effectively consist of the terms of GPLv3"
 plus the network-use paragraph.  Therefore, the developers have a good-faith
 belief that licensing these files under AGPLv3 is authorized.  (See also https://github.com/Freemius/wordpress-sdk/issues/166#issuecomment-310561976[this
 issue comment] for another example of a similar situation.)
+
+The v7.3-rc2 files are unmodified test data, kept verbatim with their
+upstream headers: the devicetrees and the bindings documents are
+`GPL-2.0-only`, `fixed.c` is `GPL-2.0-or-later`, and `i2c-cbus-gpio.c` and
+`retu-mfd.c` carry the kernel `COPYING` file's GNU General Public License
+terms (no SPDX line; in effect `GPL-2.0-only`).  As `GPL-2.0-only` is not
+compatible with AGPLv3, these files are redistributed as separate data
+files under their own upstream terms, not relicensed.  The one authored
+addition (`arch/arm/boot/dts/testproj-i2c.dts`) is
+`GPL-2.0-or-later` like the rest of Elixir.
 
 = License
 
