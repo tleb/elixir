@@ -42,7 +42,11 @@
 # through a currentTag marker in variables.db and refused: partial
 # defs/refs entries cannot be rolled back, so the data directory has
 # to be rebuilt rather than silently kept incomplete. Interruptions
-# during phases 1 and 2 need no marker, both are safe to rerun.
+# during phases 1 and 2 need no marker, both are safe to rerun: no
+# uncommitted cross-references exist then, and the sync-at-boundary
+# commit regime (marker durable first, content durable before the
+# completion that vouches for it) plus a startup consistency check
+# turns whatever partial flush SIGKILL still left into a refusal.
 #
 # Phases are sequential: a phase starts only after the previous one
 # finished, so data written by one phase is visible to the next without
@@ -563,6 +567,30 @@ for name in os.listdir(data_dir):
     if name.startswith('tmp-blobwalk-'):
         os.remove(os.path.join(data_dir, name))
 
+# Cheap structural invariant (stat() is O(1) per database): blob,
+# hash and file are written one-to-one in phase 1, numBlobs at its
+# end, so equal counts mean a rerun can trust the registered blob
+# set. A SIGKILL mid-phase-1 loses an arbitrary subset of those
+# unsynced records (each rides its own handle's cache) and the counts
+# come back unequal — refuse rather than let a rerun index on top of
+# a partial registration. The numBlobs comparison also pins the tag
+# boundary's sync order: numBlobs only reaches disk with the marker
+# (one database), so counts catching up to it mid-sync is what a
+# crash between the two syncs looks like. Residual risk: count
+# equality can miss same-cardinality corruption (a lost blob record
+# whose idx survives elsewhere) — a far narrower class than the
+# partial flushes caught here. Absent numBlobs means phase 1 never
+# ran: expect zero.
+counts = (len(db.blob), len(db.hash), len(db.file))
+num_blobs = db.vars.get('numBlobs') if db.vars.exists('numBlobs') else 0
+if len(set(counts)) > 1 or num_blobs != counts[0]:
+    print(project + ' - the data directory is inconsistent (blobs '
+          + str(counts[0]) + ', hashes ' + str(counts[1]) + ', filenames '
+          + str(counts[2]) + ', numBlobs ' + str(num_blobs)
+          + '): likely from a crashed run; rebuild it before updating again',
+          file=sys.stderr)
+    exit(1)
+
 tag_buf = []
 for tag in repo.list_tags(lib.getRepoDir(), project):
     if not db.vers.exists(tag):
@@ -678,7 +706,19 @@ def index_tag(tag):
     # cannot be rolled back: mark the tag as in-flight so that a run
     # interrupted past this point is detected and refused on the next
     # start instead of silently keeping a partial database.
-    db.vars.put(current_tag_prefix + tag, b'1')
+    #
+    # SIGKILL dies with BDB's process cache, so durability here is a
+    # two-phase commit and the order of every step is load-bearing:
+    # the marker goes durable FIRST and its sync drags numBlobs with
+    # it (same database, one cache), then the phase 1-2 records catch
+    # up under its protection. A kill in between leaves numBlobs
+    # ahead of the blob/hash/file counts and the startup check
+    # refuses; with the syncs the other way around, a kill between
+    # them leaves equal counts and NO marker, and the rerun commits
+    # the tag with zero new blobs — without its defs. A marker that
+    # outlives what it guards only costs a needless rebuild.
+    db.vars.put(current_tag_prefix + tag, b'1', sync=True)
+    db.sync_all()
 
     # Phase 3: definitions, doc comments, compatibles
     work = list(chunks(idxes))
@@ -704,10 +744,18 @@ def index_tag(tag):
     if dts_comp_support:
         parallel_phase('comps_docs', update_compatibles_bindings, work, tag, times)
 
-    # Commit the tag: only now is it fully indexed. The sync makes
-    # the completion marker durable before the marker cleanup.
+    # Commit the tag: only now is it fully indexed. Same rule as the
+    # marker write, other end of the tag: the phases 3-5 writes go
+    # durable first, then the completion marker (the vers entry),
+    # then the in-flight marker is dropped after it (delete has no
+    # sync kwarg, so an explicit sync flushes it). Committing vers
+    # before the content would let a kill during the NEXT tag's
+    # phases 1-2 lose this tag's defs to the cache while the rerun
+    # skips the tag as done; the crash drills caught exactly that.
+    db.sync_all()
     db.vers.put(tag, vers_obj, sync=True)
     db.vars.delete(current_tag_prefix + tag)
+    db.vars.sync()
 
     return times, len(idxes)
 
