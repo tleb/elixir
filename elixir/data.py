@@ -225,6 +225,13 @@ class BsdDB:
             return False
         return True
 
+    def sync(self):
+        '''Flush this handle's dirty cache pages to the OS: what makes
+        a write survive SIGKILL (the process-private cache dies with
+        the process; the OS keeps what sync handed it). Boundaries
+        only — it walks the whole cache, never a per-record cost'''
+        self.db.sync()
+
     def delete(self, key):
         key = lib.autoBytes(key)
         try:
@@ -271,6 +278,18 @@ class DB:
             self.comps = BsdDB(dir + '/compatibledts.db', ro, RefList, shared=shared)
             self.comps_docs = BsdDB(dir + '/compatibledts_docs.db', ro, RefList, shared=shared)
             # Use a RefList in case there are multiple doc comments for an identifier
+
+    def sync_all(self):
+        '''Sync every handle: the boundary call that makes a phase's
+        writes durable as a set. Each handle has its own private
+        cache (no shared environment), so syncing one says nothing
+        about the others — order is the caller's business'''
+        dbs = [self.vars, self.blob, self.hash, self.file, self.vers,
+               self.defs, *self.defs_cache.values(), self.refs, self.docs]
+        if self.dtscomp:
+            dbs += [self.comps, self.comps_docs]
+        for db in dbs:
+            db.sync()
 
     def close(self):
         self.vars.close()
