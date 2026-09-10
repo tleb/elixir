@@ -24,7 +24,12 @@
 #
 # Indexing runs in phases, in dependency order, one tag at a time
 # (oldest first): a tag is fully indexed before the next one starts, so
-# refs cannot race defs of another tag. The phases for one tag:
+# refs cannot race defs of another tag. Before the phases run, one
+# blocking walk lists every new tag's blobs up front into a packed
+# scratch file and counts the new blobs: indexing then reads its blob
+# lists from disk (memory stays flat however many tags remain) and the
+# run's remaining work is known exactly from the first tag line. The
+# phases for one tag:
 #   1. ids:    assign idx numbers to the tag's new blobs
 #   2. vers:   collect the tag's blob paths (fills file_paths,
 #      bindings_idxes); the db.vers entry itself is only committed
@@ -66,10 +71,8 @@ import multiprocessing
 import os
 import sys
 import time
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from statistics import median
 from sys import argv
 from threading import Lock
 
@@ -551,6 +554,15 @@ if len(argv) >= 2 and argv[1].isdigit():
 
 run_start = time.monotonic()
 
+# Scratch leftovers of a crashed run's upfront walk (advisory garbage
+# only, never read): sweep them before anything else, notably before
+# the interrupted-run marker logic below, so a refused data directory
+# does not keep them around either.
+data_dir = lib.getDataDir()
+for name in os.listdir(data_dir):
+    if name.startswith('tmp-blobwalk-'):
+        os.remove(os.path.join(data_dir, name))
+
 tag_buf = []
 for tag in repo.list_tags(lib.getRepoDir(), project):
     if not db.vers.exists(tag):
@@ -586,9 +598,45 @@ if not num_tags:
     exit(0)
 
 # Fork the refs pool before any phase runs: the parent only grows from
-# here (database caches fill up) and fork cost follows its page tables.
-# The workers are stateless, so an early fork loses nothing.
+# here (the walk below, then filling database caches) and fork cost
+# follows its page tables. The workers are stateless, so an early
+# fork loses nothing.
 refs_pool = multiprocessing.get_context('fork').Pool(num_threads)
+
+# ---- Walk: every tag's blobs, up front, on disk ----
+# One blocking pass before any indexing: list each tag's blobs into a
+# packed scratch file and count the new blobs (first walk sighting AND
+# absent from db.blob; indexing only starts after, so db.blob equals
+# its start state for the whole walk and no snapshot is needed). The
+# counts buy the exact-from-tag-1 run ETA; the packed file buys flat
+# memory and the same per-tag blob order the lazy calls produced.
+lists_path = os.path.join(data_dir, 'tmp-blobwalk-lists')
+seen_path = os.path.join(data_dir, 'tmp-blobwalk-seen.db')
+blob_lists = repo.BlobLists(lists_path)
+seen = data.BsdDB(seen_path, False, lambda x: x)
+
+walked_blobs = 0
+total_new = 0
+walk_start = time.monotonic()
+last_walk_log = walk_start
+for n, tag in enumerate(tag_buf, 1):
+    blobs = repo.list_blobs(lib.getRepoDir(), tag)
+    blob_lists.add(tag, blobs)
+    for hash, _, path in blobs:
+        if seen.put_new(hash, b'') and not db.blob.exists(hash):
+            total_new += 1
+    walked_blobs += len(blobs)
+    t = time.monotonic()
+    if n < num_tags and t - last_walk_log >= progress_min_interval:
+        log('walking tags %d/%d …' % (n, num_tags))
+        last_walk_log = t
+walk_s = time.monotonic() - walk_start
+log('walk done: %d tags, %d blobs walked, %d new, %s'
+    % (num_tags, walked_blobs, total_new, fmt_secs(walk_s)))
+seen.close() # its work ends with the walk; both files go at run end
+
+# The run ETA's time base: indexing, not the walk before it
+index_start = time.monotonic()
 
 def parallel_phase(name, fn, work, tag, times):
     '''One thread-pool phase under its timer: the parent consumes the
@@ -611,8 +659,10 @@ def index_tag(tag):
     bindings_idxes.clear()
     defs_idxes.clear()
 
-    # One walk over the tag's blobs feeds every phase below
-    blobs = repo.list_blobs(lib.getRepoDir(), tag)
+    # One walk over the tag's blobs feeds every phase below: read
+    # back from the upfront walk's packed file, same triples in the
+    # same ls-tree order it captured
+    blobs = blob_lists.get(tag)
 
     times = {}
 
@@ -663,36 +713,37 @@ def index_tag(tag):
 
 done_tags = 0
 done_blobs = 0
-tag_blobs = deque(maxlen=10) # blobs of the last completed tags, for the median
 
 for tag in tag_buf:
     times, blobs = index_tag(tag)
     done_tags += 1
     done_blobs += blobs
-    tag_blobs.append(blobs)
 
-    # Tag completion line with per-phase seconds and, once three tags
-    # have completed (before that there is no honest rate), the run's
-    # blob-denominated pace and ETA: remaining tags times the median
-    # blobs of the last 10 tags, over the cumulative blobs-per-second
-    # — blob counts, not tag averages, because tag sizes are skewed
-    # (the first tags carry most of the corpus); the median, not the
-    # mean, because a fat tag or a big merge must not skew it either
+    # Tag completion line with per-phase seconds and, while tags
+    # remain, the run's remaining work: the upfront walk counted the
+    # new blobs, so "blobs left" is a fact and the ETA only carries
+    # the cumulative rate's noise, exact from the first tag on
     msg = ('%s %s (%d/%d): %d blobs, %s (%s)'
            % (project, tag.decode(), done_tags, num_tags, blobs,
               fmt_secs(sum(times.values())),
               ' '.join('%s %s' % (p, fmt_secs(times[p]))
                        for p in ('defs', 'docs', 'comps', 'refs', 'comps_docs')
                        if p in times)))
-    if 3 <= done_tags < num_tags:
-        rate = done_blobs / (time.monotonic() - run_start)
-        med = median(tag_blobs)
-        msg += ' — ~%d b/tag, %d blobs/s, ETA %s' % (
-            med, rate, fmt_eta((num_tags - done_tags) * med / rate))
+    if done_tags < num_tags and done_blobs:
+        rate = done_blobs / (time.monotonic() - index_start)
+        left = total_new - done_blobs
+        msg += ' — %d blobs/s, %d blobs left, ETA %s' % (
+            round(rate), left, fmt_eta(left / rate))
     log(msg)
 
 refs_pool.terminate()
 refs_pool.join()
+
+# The walk's scratch artifacts live only for the run; a crash leaves
+# them, and the next start sweeps them
+blob_lists.close()
+os.remove(lists_path)
+os.remove(seen_path)
 
 generate_defs_caches()
 
@@ -724,6 +775,9 @@ log('SUMMARY ' + json.dumps({
     'project': project,
     'tags': num_tags,
     'blobs': done_blobs,
+    'walk_s': round(walk_s, 3),
+    'walked_blobs': walked_blobs,
+    'total_new': total_new,
     'wall_s': round(wall, 3),
     'blobs_per_s': round(done_blobs / wall, 3),
     'phases': {p: round(run_phase_s[p], 3) for p in phases},

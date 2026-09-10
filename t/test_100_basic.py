@@ -89,18 +89,24 @@ def test_db_files(testenv):
 
 # A currentTag marker for a tag that is not in versions.db means an
 # interrupted run: update.py must refuse the data directory rather than
-# silently keep the partially indexed tag
+# silently keep the partially indexed tag. The crashed run's walk
+# scratch is swept even then: the sweep runs before the marker check
+# and must not interact with it
 def test_update_refuses_interrupted_run(build_env, tmp_path):
     env = build_env(tmp_path)
     current_tag_marker(env, 'v9.9')
+    (Path(env.data_dir) / 'tmp-blobwalk-lists').write_bytes(b'stale')
+    (Path(env.data_dir) / 'tmp-blobwalk-seen.db').write_bytes(b'stale')
 
     result = update(env)
     assert result.returncode != 0, result.stdout
     assert 'interrupted run' in result.stdout
+    assert not list(Path(env.data_dir).glob('tmp-blobwalk-*'))
 
 
 # A marker left over from a crash after the tag was committed is cleaned
-# up, not mistaken for an interrupted run
+# up, not mistaken for an interrupted run. No tags left to index: the
+# early-exit path never creates the walk's scratch artifacts
 def test_update_cleans_stale_marker(build_env, tmp_path):
     env = build_env(tmp_path)
     current_tag_marker(env, TAG)
@@ -108,6 +114,26 @@ def test_update_cleans_stale_marker(build_env, tmp_path):
     result = update(env)
     assert result.returncode == 0, result.stdout
     assert '0 new tags' in result.stdout
+    assert not list(Path(env.data_dir).glob('tmp-blobwalk-*'))
+
+
+# Leftovers of a crashed run's upfront walk are swept at startup, and
+# a full run (walk, indexing) deletes its own scratch at the end
+def test_update_sweeps_stale_walk_scratch(build_env, tmp_path):
+    env = build_env(tmp_path)
+    git = ['git', '-C', str(env.repo_dir), '-c', 'user.name=test',
+           '-c', 'user.email=test']
+    (Path(env.repo_dir) / 'stale.c').write_text('int stale;\n')
+    subprocess.run(git + ['add', '.'], check=True)
+    subprocess.run(git + ['commit', '-m', 'stale'], check=True)
+    subprocess.run(git + ['tag', 'v5.5'], check=True)
+    (Path(env.data_dir) / 'tmp-blobwalk-lists').write_bytes(b'stale')
+    (Path(env.data_dir) / 'tmp-blobwalk-seen.db').write_bytes(b'stale')
+
+    result = update(env)
+    assert result.returncode == 0, result.stdout
+    assert 'walk done: 1 tags' in result.stdout
+    assert not list(Path(env.data_dir).glob('tmp-blobwalk-*'))
 
 
 def update(env):
@@ -119,13 +145,13 @@ def update(env):
 
 
 # The indexing log: every line timestamped by the parent (the single
-# writer), one tag line per completed tag and one machine-parseable
-# SUMMARY JSON line at the end
+# writer), one walk-done line for the upfront walk, one tag line per
+# completed tag and one machine-parseable SUMMARY JSON line at the end
 def test_update_log_format(build_env, tmp_path):
     env = build_env(tmp_path)
-    # Three more tags with fresh blobs each, so a (3/4) tag line
-    # exists to pin the run-ETA clause: it needs three completed tags
-    # and at least one tag left to go
+    # Three more tags with fresh blobs each, so the last tag line
+    # (4/4) exists to pin the no-ETA end of the run and the first
+    # (1/4) carries the ETA clause from tag one
     git = ['git', '-C', str(env.repo_dir), '-c', 'user.name=test',
            '-c', 'user.email=test']
     for i in (2, 3, 4):
@@ -146,26 +172,35 @@ def test_update_log_format(build_env, tmp_path):
     assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj: 4 new tags \(repo .+, data .+, 4 threads\)$',
                      result.stdout, re.M), result.stdout
 
+    # Walk-done line: the upfront walk's totals. The t/tree walk is
+    # faster than the progress interval, so no "walking tags" line
+    assert re.search(r'^\[\d\d:\d\d:\d\d\] walk done: 4 tags, \d+ blobs walked, \d+ new, \S+$',
+                     result.stdout, re.M), result.stdout
+
     # Tag line: timestamp, project tag (n/N), blobs, seconds, phases.
-    # With fewer than 3 completed tags (and on the last tag) the line
-    # ends after the phases: nothing rate-derived is shown yet
+    # The run ETA is exact from the first completed tag (the walk
+    # counted the total new blobs): cumulative rate over blobs left
     assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj v5\.4 \(1/4\): '
+                     r'\d+ blobs, \S+ \(defs \S+ docs \S+ comps \S+ refs \S+ comps_docs \S+\)'
+                     r' — \d+ blobs/s, \d+ blobs left, ETA \S+$',
+                     result.stdout, re.M), result.stdout
+
+    # The last tag line ends after the phases: no ETA with nothing left
+    assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj v5\.7 \(4/4\): '
                      r'\d+ blobs, \S+ \(defs \S+ docs \S+ comps \S+ refs \S+ comps_docs \S+\)$',
                      result.stdout, re.M), result.stdout
 
-    # From the third completed tag on, the blob-denominated run ETA:
-    # median blobs per tag, cumulative rate, ETA
-    assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj v5\.6 \(3/4\): '
-                     r'\d+ blobs, \S+ \(defs \S+ docs \S+ comps \S+ refs \S+ comps_docs \S+\)'
-                     r' — ~\d+ b/tag, \d+ blobs/s, ETA \S+$',
-                     result.stdout, re.M), result.stdout
-
-    # The machine line parses as JSON with every phase
+    # The machine line parses as JSON with every phase and the walk's
+    # counters (total_new cross-checks phase 1's count: the walk's
+    # new-blob condition is exactly what update_blob_ids applies)
     line = next(l for l in result.stdout.splitlines() if 'SUMMARY {' in l)
     summary = json.loads(line.split('SUMMARY ', 1)[1])
     assert summary['project'] == 'testproj'
     assert summary['tags'] == 4
     assert summary['blobs'] > 0
+    assert summary['total_new'] == summary['blobs']
+    assert summary['walked_blobs'] > summary['blobs'] # tags share blobs
+    assert summary['walk_s'] > 0
     assert summary['wall_s'] > 0
     assert summary['blobs_per_s'] > 0
     assert set(summary['phases']) == {'ids', 'vers', 'defs', 'docs', 'comps',
@@ -174,6 +209,9 @@ def test_update_log_format(build_env, tmp_path):
     assert summary['phases']['refs'] > 0
     assert isinstance(summary['lexer_errors'], int)
     assert isinstance(summary['ctags_notices'], int)
+
+    # The walk's scratch artifacts are gone once the run succeeded
+    assert not list(Path(env.data_dir).glob('tmp-blobwalk-*'))
 
     # t/tree phases are all faster than the 5 s progress interval:
     # no in-phase progress lines (percent-done blobs counters), only

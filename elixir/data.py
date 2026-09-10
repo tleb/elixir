@@ -212,6 +212,19 @@ class BsdDB:
         if sync:
             self.db.sync()
 
+    def put_new(self, key, val):
+        '''put() that answers whether the key was fresh: False when it
+        already existed (DB_NOOVERWRITE leaves the stored value)'''
+        key = lib.autoBytes(key)
+        val = lib.autoBytes(val)
+        if type(val) is not bytes:
+            val = val.pack()
+        try:
+            self.db.put(key, val, flags=berkeleydb.db.DB_NOOVERWRITE)
+        except berkeleydb.db.DBKeyExistError:
+            return False
+        return True
+
     def delete(self, key):
         key = lib.autoBytes(key)
         try:

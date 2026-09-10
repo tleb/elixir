@@ -165,6 +165,32 @@ def test_list_blobs_drops_submodule_entries():
                              if b' blob ' in line)
 
 
+@pytest.mark.skipif(not HAVE_CLONES,
+                    reason=f'no elixir-data clones under {DATA_DIR}')
+def test_blob_lists_round_trip_equals_list_blobs(tmp_path):
+    '''BlobLists, the upfront walk's packed scratch file: add() every
+    tag of a real clone, then get() each one back — the triples and
+    their order must equal a direct list_blobs() exactly. Indexing
+    consumes the scratch file instead of the git listing, so the
+    dump's byte-identity hangs on this equality.'''
+    repo_dir = DATA_DIR / 'musl' / 'repo'
+    tags = repo.list_tags(repo_dir)
+    assert len(tags) > 1
+
+    lists = repo.BlobLists(str(tmp_path / 'blobwalk-lists'))
+    for tag in tags:
+        lists.add(tag, repo.list_blobs(repo_dir, tag))
+    for tag in tags:
+        assert lists.get(tag) == repo.list_blobs(repo_dir, tag), tag
+    lists.close()
+
+    # The scratch file itself is plaintext "hash path" lines
+    # (greppable, one blob per line: hashes contain no space)
+    with open(tmp_path / 'blobwalk-lists', 'rb') as f:
+        lines = f.read().split(b'\n')[:-1]
+    assert lines and all(len(l.split(b' ', 1)) == 2 for l in lines)
+
+
 def test_dts_comp_support_table():
     '''The table matches projects/*.sh: exactly the projects whose
     plugin sets dts_comp_support=1, plus testproj'''

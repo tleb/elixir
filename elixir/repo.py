@@ -634,6 +634,41 @@ def list_blobs(repo_dir, tag):
     return blobs
 
 
+class BlobLists:
+    '''Per-tag blob lists packed into one plaintext scratch file,
+    "hash path" lines in ls-tree order: written once by an upfront
+    walk of every tag, read back per tag during indexing, so the
+    lists live on disk, not in memory. The filename is not stored;
+    get() recomputes it, and returns exactly list_blobs()'s triples
+    in exactly list_blobs()'s order — the reconstruction the dump's
+    byte-identity hangs on. A hash contains no space and git quotes
+    paths with control characters (newlines included), so one line
+    is always one blob.'''
+    def __init__(self, filename):
+        self.f = open(filename, 'w+b')
+        self.slices = {} # tag -> (offset, length) in the file
+
+    def add(self, tag, blobs):
+        '''Append one tag's (hash, filename, path) triples; the
+        filename is dropped here and recomputed by get()'''
+        start = self.f.tell()
+        for hash, filename, path in blobs:
+            self.f.write(hash + b' ' + path + b'\n')
+        self.slices[tag] = (start, self.f.tell() - start)
+
+    def get(self, tag):
+        offset, length = self.slices[tag]
+        self.f.seek(offset)
+        blobs = []
+        for line in self.f.read(length).split(b'\n')[:-1]:
+            hash, _, path = line.partition(b' ')
+            blobs.append((hash, os.path.basename(path), path))
+        return blobs
+
+    def close(self):
+        self.f.close()
+
+
 _batch_tls = local()
 
 def get_blob(hash):
