@@ -74,7 +74,7 @@ CLUSTER_ORDER = {
     'version_objects': 'versionid, blobid, filepath',
     'defs': 'identid, blobid, defline, family, deftype',
     'refs': 'identid, blobid, refline, family',
-    'docs': 'identid, blobid, line',
+    'docs': 'identid, blobid, line, family',
 }
 
 # Column order used by insert(); kept explicit to catch schema drift.
@@ -85,7 +85,7 @@ COLUMNS = {
     'idents': ('identid', 'name', 'def_fams', 'macro_fams'),
     'defs': ('identid', 'blobid', 'defline', 'deftype', 'family'),
     'refs': ('identid', 'blobid', 'refline', 'family'),
-    'docs': ('identid', 'blobid', 'line'),
+    'docs': ('identid', 'blobid', 'line', 'family'),
 }
 
 # Referenced columns checked by check_invariants(): child.col -> parent table.
@@ -105,7 +105,7 @@ _DUMP = {
     'idents': 'SELECT identid, name, def_fams, macro_fams FROM idents ORDER BY identid',
     'defs': 'SELECT identid, blobid, defline, deftype, family FROM defs ORDER BY identid, blobid, defline, family, deftype',
     'refs': 'SELECT identid, blobid, refline, family FROM refs ORDER BY identid, blobid, refline, family',
-    'docs': 'SELECT identid, blobid, line FROM docs ORDER BY identid, blobid, line',
+    'docs': 'SELECT identid, blobid, line, family FROM docs ORDER BY identid, blobid, line, family',
 }
 
 _DDL = [
@@ -154,7 +154,8 @@ _DDL = [
     CREATE TABLE IF NOT EXISTS docs (
         identid INTEGER NOT NULL,
         blobid  INTEGER NOT NULL,
-        line    INTEGER NOT NULL
+        line    INTEGER NOT NULL,
+        family  reffam NOT NULL
     )""",
 ]
 
@@ -164,7 +165,7 @@ _STAGE_DDL = {
     'version_objects': 'CREATE TABLE IF NOT EXISTS version_objects_stage (versionid INTEGER, blobid INTEGER, filepath VARCHAR)',
     'defs': 'CREATE TABLE IF NOT EXISTS defs_stage (identid INTEGER, blobid INTEGER, defline INTEGER, deftype VARCHAR, family deffam)',
     'refs': 'CREATE TABLE IF NOT EXISTS refs_stage (identid INTEGER, blobid INTEGER, refline INTEGER, family reffam)',
-    'docs': 'CREATE TABLE IF NOT EXISTS docs_stage (identid INTEGER, blobid INTEGER, line INTEGER)',
+    'docs': 'CREATE TABLE IF NOT EXISTS docs_stage (identid INTEGER, blobid INTEGER, line INTEGER, family reffam)',
 }
 
 ##################################################################################
@@ -296,8 +297,12 @@ def check_invariants(conn):
             if n:
                 v.append(f'{t}: {n} rows with orphan {col} (no {parent} row)')
 
-    n = conn.execute('SELECT count(*) FROM refs_all r WHERE NOT EXISTS '
-                     '(SELECT 1 FROM defs_all d WHERE d.identid = r.identid)').fetchone()[0]
+    # The refs gate, exactly as update.py inserts them: an occurrence is
+    # kept only for idents with at least one non-compatible def (the
+    # port of the old db.defs keys; compatibles lived in db.comps).
+    n = conn.execute("SELECT count(*) FROM refs_all r WHERE NOT EXISTS "
+                     "(SELECT 1 FROM defs_all d WHERE d.identid = r.identid "
+                     "AND d.deftype <> 'compatible')").fetchone()[0]
     if n:
         v.append(f'refs: {n} rows reference an ident with no defs')
 
