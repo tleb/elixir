@@ -156,7 +156,7 @@ def main():
     ap.add_argument('--out', help='capture dir '
                     '(default ../elixir-data-acceptance/equiv/<manifest stem>)')
     ap.add_argument('--proj-dir', help='LXR_PROJ_DIR of the side to capture '
-                    '(default ../equiv-bootstrap/<project>-old)')
+                    '(default ../equiv-bootstrap/<project>-ddb)')
     ap.add_argument('--workers', type=int, default=1)
     ap.add_argument('--no-dump-hash', action='store_true',
                     help='skip the data-dir dump md5 (debug iteration only)')
@@ -166,7 +166,7 @@ def main():
     stem = os.path.splitext(os.path.basename(args.manifest))[0]
     out = args.out or os.path.join(common.DEFAULT_CAPTURES_ROOT, stem)
     project = _project_of(args.manifest)
-    proj_dir = args.proj_dir or common.OLD_SIDES[project]
+    proj_dir = args.proj_dir or common.SIDES[project]
 
     run_capture(args.manifest, out, proj_dir, workers=args.workers,
                 dump_hash=not args.no_dump_hash, force=args.force)

@@ -18,11 +18,15 @@ Layout (R3B §2):
                     changes — reviewed like code, never for drift
 
 Captures land outside the repo, under ../elixir-data-acceptance/equiv/
-(default), keyed by manifest stem. The old side is captured once from
-the pinned pre-migration worktree; during the migration every gate
-replays against those frozen captures, so no BDB code is needed in the
-tree. `replay --bless` re-freezes captures, and exists only for
-manifest-generator changes.
+(default), keyed by manifest stem. The go-forward captures (musl-A,
+musl-B) were frozen from the post-cutover commit, serving the DuckDB
+bootstrap ../equiv-bootstrap/musl-ddb; every gate replays the current
+tree against them. The pre-cutover capture sets (captured from the
+BDB old side) are kept beside them with a .bdb-era suffix, and the
+linux2tag-B captures + linux2tag-old bootstrap remain on disk — both
+are the migration's frozen evidence; the tree no longer ships the
+engine that served them. `replay --bless` re-freezes captures, and
+exists only for manifest-generator changes.
 
 Bootstrap proj-dirs (symlinks to the frozen assets) live under
 ../equiv-bootstrap/; see R3B §5 for the pairing rules (repo HEAD +

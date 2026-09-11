@@ -57,11 +57,13 @@ ELIXIR_VERSION_PIN = 'equiv-harness'
 DEFAULT_CAPTURES_ROOT = os.path.join(os.path.dirname(REPO_ROOT), 'elixir-data-acceptance', 'equiv')
 DEFAULT_BOOTSTRAP_ROOT = os.path.join(os.path.dirname(REPO_ROOT), 'equiv-bootstrap')
 
-# proj-dir of the frozen old side, per project name (linux's data dir is
-# rebuilt by T-E2, not this task)
-OLD_SIDES = {
-    'musl': os.path.join(DEFAULT_BOOTSTRAP_ROOT, 'musl-old'),
-    'linux': os.path.join(DEFAULT_BOOTSTRAP_ROOT, 'linux2tag-old'),
+# proj-dir of the DuckDB bootstrap per project name (repo + data
+# symlinks into ../elixir-data).  The pre-cutover BDB sides
+# (musl-old, linux2tag-old) stay on disk as frozen migration evidence;
+# capture from them is no longer possible — the tree has no engine for
+# their data dirs.
+SIDES = {
+    'musl': os.path.join(DEFAULT_BOOTSTRAP_ROOT, 'musl-ddb'),
 }
 
 
