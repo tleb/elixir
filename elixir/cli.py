@@ -118,8 +118,44 @@ def register_update(subparsers):
                         help="Project name(s), under the current root")
     parser.set_defaults(handler=run_update)
 
-# Subcommand registry; later tasks append index/remote/serve
-subcommands = [register_query, register_update]
+# --- index: ported from utils/index, now elixir.index ---
+
+def run_index(args):
+    # Deferred, like update: index pulls the whole update pipeline in
+    from elixir import index
+
+    if index.run(os.getcwd(), None if args.all else args.projects):
+        raise SystemExit(1)
+
+def register_index(subparsers):
+    parser = subparsers.add_parser('index', help="Create and index projects")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('projects', nargs='*', metavar='project',
+                       help="Project name(s), under the current root")
+    group.add_argument('--all', action='store_true',
+                       help="Index every project under the current root")
+    parser.set_defaults(handler=run_index)
+
+# --- remote: the explicit way to give a project extra remotes ---
+
+def run_remote_add(args):
+    from elixir import index
+
+    proj_dir = os.path.join(os.getcwd(), args.project)
+    index.project_init(proj_dir)
+    index.project_add_remote(proj_dir, args.url)
+
+def register_remote(subparsers):
+    parser = subparsers.add_parser('remote', help="Manage project remotes")
+    sub = parser.add_subparsers(required=True)
+
+    subparser = sub.add_parser('add', help="Add a remote to a project's repository")
+    subparser.add_argument('project', help="Project name, under the current root")
+    subparser.add_argument('url', help="The remote's fetch URL")
+    subparser.set_defaults(handler=run_remote_add)
+
+# Subcommand registry; later tasks append serve
+subcommands = [register_query, register_update, register_index, register_remote]
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
