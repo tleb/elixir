@@ -75,7 +75,7 @@ def test_db_files(testenv):
 
 def update(env):
     return subprocess.run(
-        [sys.executable, str(REPO_ROOT / 'update.py'), '4'],
+        [sys.executable, str(REPO_ROOT / 'update.py')],
         env=env.env(), cwd=REPO_ROOT,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         universal_newlines=True)
@@ -130,7 +130,7 @@ def test_update_sigkill_resume_completes(build_env, tmp_path):
         shutil.rmtree(env.data_dir)
         os.mkdir(env.data_dir)
         proc = subprocess.Popen(
-            [sys.executable, str(REPO_ROOT / 'update.py'), '4'],
+            [sys.executable, str(REPO_ROOT / 'update.py')],
             env=env.env(), cwd=REPO_ROOT,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(offset)
@@ -251,7 +251,7 @@ def test_update_log_format(build_env, tmp_path):
     assert result.returncode == 0, result.stdout
 
     # Run start line: timestamp, project, tag count
-    assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj: 4 new tags \(repo .+, data .+, 4 threads\)$',
+    assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj: 4 new tags \(repo .+, data .+, \d+ threads\)$',
                      result.stdout, re.M), result.stdout
 
     # Walk-done line: the upfront walk's totals. The t/tree walk is

@@ -87,7 +87,7 @@ def build_db(env: TestEnv):
 
     # A failing run must fail the suite with its output visible
     result = subprocess.run(
-        [sys.executable, str(REPO_ROOT / 'update.py'), '4'],
+        [sys.executable, str(REPO_ROOT / 'update.py')],
         env=env.env(), cwd=REPO_ROOT,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
     assert result.returncode == 0, result.stdout
