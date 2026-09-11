@@ -115,6 +115,35 @@ def copy_db(src, dst_dir, name='data.duckdb'):
 
 
 ##################################################################################
+# By-name index: the write-side DDL creates it (read-only connections
+# cannot), init() is idempotent, and it changes no logical content
+
+def test_init_creates_idents_name_index(tmp_path):
+    path = tmp_path / 'data.duckdb'
+    conn = dd.connect_rw(path)
+    conn.execute("INSERT INTO idents VALUES (0, 'foo', NULL, NULL)")
+    conn.close()
+
+    conn = dd.connect_rw(path)  # idempotent
+    rows = conn.execute(
+        "SELECT index_name, table_name FROM duckdb_indexes()"
+        " WHERE table_name = 'idents'").fetchall()
+    conn.close()
+    assert ('idx_idents_name', 'idents') in rows
+
+    conn = dd.connect_ro(path)
+    assert conn.execute(
+        "SELECT identid FROM idents WHERE name = 'foo'"
+    ).fetchall() == [(0,)]
+    conn.close()
+
+def test_index_changes_no_logical_content(good_db, tmp_path):
+    before = dump_hash(good_db)
+    conn = dd.connect_rw(good_db)  # would create the index if missing
+    conn.close()
+    assert dump_hash(good_db) == before
+
+##################################################################################
 # Determinism: two independent builds from the same input
 
 def test_two_builds_same_dump_hash(tmp_path):

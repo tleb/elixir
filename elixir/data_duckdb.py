@@ -157,6 +157,11 @@ _DDL = [
         line    INTEGER NOT NULL,
         family  reffam NOT NULL
     )""",
+    # By-name ident lookups (query.py hot path, autocomplete prefix
+    # scans).  ART index on a dimension table — affordable next to the
+    # PK ones (r3a §4); read-only connections use it, they just cannot
+    # create it, which is why it lives in the write-side DDL.
+    'CREATE INDEX IF NOT EXISTS idx_idents_name ON idents(name)',
 ]
 
 # Staging twins of the fact tables: same columns, no constraints (the

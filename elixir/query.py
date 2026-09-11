@@ -86,7 +86,6 @@ class Query:
         self.file_cache = {}
         self._tag_cache = {}       # tag -> versionid or None
         self._tags = None          # set of the database's tags
-        self._mark_sets = {}       # family -> token mark set (defs_cache-*)
 
     def close(self):
         self.db.close()
@@ -149,16 +148,27 @@ class Query:
         'M': "d.family = 'K'",
     }
 
-    def _mark_set(self, family):
-        marks = self._mark_sets.get(family)
-        if marks is None:
-            marks = set(row[0] for row in self.db.execute(
-                'SELECT DISTINCT i.name FROM idents i JOIN defs d'
-                ' ON d.identid = i.identid'
-                " WHERE d.deftype <> 'compatible' AND "
-                + self._DEFS_CACHE_SQL[family]).fetchall())
-            self._mark_sets[family] = marks
-        return marks
+    def _marks_for(self, family, words):
+        # The defs_cache-* membership of the BDB layer, restricted to
+        # one file's tokens: which of `words` have a definition
+        # compatible with the file family (generate_defs_caches
+        # applied lib.compatibleFamily/compatibleMacro to db.defs
+        # records).  Compatibles never qualified (they lived in
+        # db.comps, not db.defs).  Asking per file beats materializing
+        # the whole family's name set per Query.  The words travel as
+        # one chr(1)-joined string: a Python list parameter converts
+        # at ~0.07 ms per element (duckdb 1.5.5 client), which would
+        # dominate — and identifiers cannot contain control bytes.
+        if not words:
+            return set()
+        rows = self.db.execute(
+            'SELECT DISTINCT i.name FROM idents i JOIN defs d'
+            ' ON d.identid = i.identid'
+            " WHERE d.deftype <> 'compatible' AND "
+            + self._DEFS_CACHE_SQL[family]
+            + " AND i.name IN (SELECT unnest(string_split(?, chr(1))))",
+            ['\x01'.join(sorted(words))]).fetchall()
+        return set(row[0] for row in rows)
 
     # Returns the contents of the specified file
     # Tokens are marked for further processing
@@ -168,23 +178,27 @@ class Query:
         family = lib.getFileFamily(filename)
 
         if family != None:
-            assert family in lib.CACHED_DEFINITIONS_FAMILIES, f"family {family} must have its definitions cached"
+            assert family in dd.FAM_BITS, f"family {family} must have its definitions cached"
 
-            marks = self._mark_set(family)
-
-            buffer = BytesIO()
-            tokens = tokenizeFile(self.repo_dir, self.project, version, path, family)
-            even = True
-
+            tokens = list(tokenizeFile(self.repo_dir, self.project,
+                                       version, path, family))
             prefix = b''
             if family == 'K':
                 prefix = b'CONFIG_'
+            # Words are the odd positions of the separator/word pairs;
+            # the unique set is what the mark query needs
+            words = set(decode(prefix + tok)
+                        for i, tok in enumerate(tokens) if i % 2 == 1)
+            marks = self._marks_for(family, words)
 
-            for tok in tokens:
-                even = not even
-                tok2 = prefix + tok
-                if even and decode(tok2) in marks:
-                    tok = b'\033[31m' + tok2 + b'\033[0m'
+            buffer = BytesIO()
+            for i, tok in enumerate(tokens):
+                if i % 2 == 1:
+                    tok2 = prefix + tok
+                    if decode(tok2) in marks:
+                        tok = b'\033[31m' + tok2 + b'\033[0m'
+                    else:
+                        tok = lib.unescape(tok)
                 else:
                     tok = lib.unescape(tok)
                 buffer.write(tok)
