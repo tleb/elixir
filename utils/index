@@ -63,17 +63,13 @@ project_fetch() {
 
 # $1 is the project path (parent of data/ and repo/).
 project_index() {
-    if test -z "$ELIXIR_THREADS"; then
-        ELIXIR_THREADS="$(nproc)"
-    fi
-
     elixir_sources="$(dirname "$(dirname "$0")")"
 
     # update.py indexes the new tags one at a time, deterministically
     # (references are only recorded for definitions already in the
-    # database), so one call is enough.
+    # database), so one call is enough. It uses every CPU by itself.
     LXR_REPO_DIR=$1/repo LXR_DATA_DIR=$1/data \
-        python3 "$elixir_sources/update.py" $ELIXIR_THREADS
+        python3 "$elixir_sources/update.py"
 }
 
 # $1 is the Elixir root data path.

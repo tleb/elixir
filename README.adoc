@@ -96,8 +96,7 @@ The `index` command fetches the project's remotes (creating the bare
 repository on first run) and then runs `update.py` to build the databases.
 Run it again at any time to index newly released versions.
 
-You can set `$ELIXIR_THREADS` if you want to change the number of threads used by
-update.py for indexing (by default the number of CPUs on your system).
+`update.py` uses every CPU on the system; there is no thread-count knob.
 `$ELIXIR_DDB_MEM` overrides DuckDB's ingest memory budget (by default a
 quarter of the RAM, so the indexing pool keeps room beside it).
 
