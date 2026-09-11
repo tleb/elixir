@@ -52,23 +52,27 @@
 # Workers never touch the database (DuckDB allows one writer process).
 # Each work unit writes its rows to an Arrow IPC scratch file
 # (tmp-arrow-<phase>-<tag>-<chunk>.arrow in the data dir, swept at
-# startup and at successful run end, deleted per phase once ingested);
-# the parent then ingests a whole phase with INSERT ... SELECT from the
-# registered files, and everything that was per-row Python over BDB —
-# hash dedup, identid assignment, the refs defs-gate, the def-line
-# self-reference suppression, family bitmasks — happens in SQL. Every
-# scratch row carries a seq (chunk index and row index packed into one
-# integer): file-scan order is not guaranteed, so determinism hangs on
-# ordering by seq, never on arrival.
+# startup, deleted the moment it is ingested); the parent STREAMS the
+# ingestion: whenever enough scratch has piled up (and once more
+# at phase end) it runs their SQL as one dataset, while the pool's
+# workers keep crunching later chunks — the SQL mostly hides under
+# worker time instead of idling the pool at a barrier — and
+# everything that was per-row Python over BDB — hash dedup, identid
+# assignment, the refs defs-gate, the def-line self-reference
+# suppression, family bitmasks — happens in SQL. Every scratch row
+# carries a seq (chunk index and row index packed into one integer):
+# file-scan order is not guaranteed, so determinism hangs on ordering
+# by seq, never on arrival — and imap hands results back in chunk
+# order, so ingesting consecutive arrivals in order reproduces the
+# batched ingest's identid minting exactly.
 #
 # Phases are sequential: a phase starts only after the previous one
 # finished, so data written by one phase is visible to the next. Inside
-# a phase, work units (chunks of blobs) run in a thread pool; refs and
-# docs lex/scan in a process pool instead (pure Python, GIL-bound),
-# forked once at startup while the parent is still small and BEFORE the
-# parent opens its DuckDB connection (forking a process with live
-# DuckDB threads is unsupported), because fork cost grows with the
-# parent's page tables as the caches fill.
+# a phase, work units (chunks of blobs) all run on the one process pool
+# forked at startup while the parent is still small and BEFORE it opens
+# its DuckDB connection (forking a process with live DuckDB threads is
+# unsupported), because fork cost grows with the parent's page tables
+# as the caches fill.
 #
 # Logging: the parent process is the single writer. Every line carries
 # a [HH:MM:SS] wall-clock timestamp; workers and pool processes never
@@ -215,16 +219,20 @@ class PhaseProgress:
         self.last = t
 
 class PhaseTimer:
-    '''Times one phase into the tag's dict and the run-wide totals'''
-    def __init__(self, times, name):
+    '''Times one span into the tag's dict and the run-wide totals;
+    repeated spans (a phase's per-chunk ingests) accumulate. totals
+    picks the run-wide dict: run_phase_s for phase walls, run_ingest_s
+    for the SQL share'''
+    def __init__(self, times, name, totals=None):
         self.times = times
         self.name = name
+        self.totals = run_phase_s if totals is None else totals
     def __enter__(self):
         self.start = time.monotonic()
     def __exit__(self, *exc):
         seconds = time.monotonic() - self.start
-        self.times[self.name] = seconds
-        run_phase_s[self.name] += seconds
+        self.times[self.name] = self.times.get(self.name, 0.0) + seconds
+        self.totals[self.name] += seconds
 
 
 # ---- Arrow scratch: how workers hand rows to the parent's SQL ----
@@ -442,24 +450,6 @@ def _docs_chunk(item):
     write_chunk(path, DOCS_SCHEMA, rows)
     return path, b''.join(stderr_out)
 
-def update_doc_comments(triple_chunks, tag, tag_no, progress):
-    '''Doc comments in the pool forked at startup, like refs: the scan
-    around the ctags output is pure Python and GIL-bound, so it runs in
-    process workers while the pool idles between the defs and refs
-    phases. Results arrive in chunk order, so progress and counter
-    aggregation are deterministic and single-threaded'''
-    items = [('docs', tag_no, ci, chunk)
-             for ci, chunk in enumerate(triple_chunks)]
-    files = []
-    done = 0
-    for chunk, (path, stderr) in zip(triple_chunks,
-                                     refs_pool.imap(_docs_chunk, items)):
-        collect_ctags_stderr(stderr)
-        files.append(path)
-        done += len(chunk)
-        progress.update(done)
-    return files
-
 
 # ---- Phase 3c: comps (thread pool) ----
 
@@ -573,22 +563,6 @@ def _refs_lex_chunk(item):
     write_chunk(path, REFS_SCHEMA, rows)
     return path, errors, samples
 
-def update_references(triple_chunks, tag, tag_no, progress):
-    '''Lex references in the pool forked at startup; the SQL below does
-    the gating. Results arrive in chunk order, so the counters and
-    progress are deterministic'''
-    items = [('refs', tag_no, ci, chunk)
-             for ci, chunk in enumerate(triple_chunks)]
-    files = []
-    done = 0
-    for chunk, (path, errors, samples) in zip(
-            triple_chunks, refs_pool.imap(_refs_lex_chunk, items)):
-        count_lexer_errors(errors, samples)
-        files.append(path)
-        done += len(chunk)
-        progress.update(done)
-    return files
-
 
 # ---- Phase 5: comps_docs (thread pool) ----
 
@@ -612,31 +586,55 @@ def update_compatibles_bindings(item):
 
 
 # ---- Phase ingestion: the per-row BDB work, as SQL ----
+# Streaming: results arrive in chunk order and are ingested in
+# consecutive batches, so arrival order IS seq order and
+# batched-on-arrival ingestion reproduces the whole-phase ingest's
+# identid minting exactly — determinism needs nothing else.
 
-def ingest_scratch(name, files, empty_sql):
-    '''Materialize a phase's scratch files into a temp table, in the
-    transaction the tag opened (empty_sql gives the typed empty shape
-    when a phase produced no files). Scan order is not guaranteed, so
-    nothing downstream may depend on it — orderings key on seq'''
-    if files:
-        conn.register(name + '_in',
-                      pads.dataset([str(f) for f in files], format='ipc'))
-        conn.execute('CREATE OR REPLACE TEMP TABLE %s AS SELECT * FROM %s_in'
-                     % (name, name))
-    else:
-        conn.execute('CREATE OR REPLACE TEMP TABLE %s AS %s' % (name, empty_sql))
+ingest_scratch_bytes = 64 << 20 # flush a batch when its scratch files
+                                # reach this size: big enough to
+                                # amortize the SQL's fixed costs (the
+                                # hash builds over idents/defs_all),
+                                # small enough to keep the tail ingest
+                                # short. Phases whose whole scratch is
+                                # smaller (musl, docs, comps at any
+                                # scale) take the single end-of-phase
+                                # ingest
 
-# Empty scratch shapes, typed like the WORKERS' schemas (not the
-# target tables): a phase with no files must still materialize a
-# temp table the ingest SQL can reference
+def ingest_scratch(name, files):
+    '''Materialize one ingest batch's scratch files into a temp table,
+    in the transaction the tag opened. Scan order is not guaranteed,
+    so nothing downstream may depend on it — orderings key on seq'''
+    conn.register(name + '_in',
+                  pads.dataset([str(f) for f in files], format='ipc'))
+    conn.execute('CREATE OR REPLACE TEMP TABLE %s AS SELECT * FROM %s_in'
+                 % (name, name))
+
+# The tag-long accumulators' shapes: tag_defs keeps every ctags line of
+# the tag (the def-line map and the fams update read it after the
+# phase); tag_comps keeps every compatible. Empty shapes, typed like
+# the WORKERS' schemas (not the target tables), so a tag whose phase
+# writes no rows still has them
 EMPTY_DEFS = ("SELECT 0::BIGINT AS seq, ''::VARCHAR AS name,"
               " 0::INTEGER AS blobid, 0::INTEGER AS defline,"
               " ''::VARCHAR AS deftype, ''::VARCHAR AS family LIMIT 0")
 EMPTY_DOCS = ("SELECT 0::BIGINT AS seq, ''::VARCHAR AS name,"
               " 0::INTEGER AS blobid, 0::INTEGER AS line,"
               " ''::VARCHAR AS family LIMIT 0")
-EMPTY_REFS = ("SELECT ''::VARCHAR AS name, 0::INTEGER AS blobid,"
-              " 0::INTEGER AS line, ''::VARCHAR AS family LIMIT 0")
+
+def init_tag_tables():
+    '''The per-tag accumulators, empty: created at tag start so every
+    reader below sees them even when the phase produced nothing'''
+    conn.execute('CREATE OR REPLACE TEMP TABLE tag_defs AS ' + EMPTY_DEFS)
+    # The name-gated defs accumulator: what fams reads. Raw tag_defs
+    # is NOT enough there — a blacklisted name can still be minted by
+    # the docs phase (docs has no name gate), and its raw defs rows
+    # must not set that ident's family bits
+    conn.execute('''CREATE OR REPLACE TEMP TABLE tag_defs_gated AS
+                    SELECT name, seq, blobid, defline, deftype,
+                           family::deffam AS family FROM tag_defs LIMIT 0''')
+    if dts_comp_support:
+        conn.execute('CREATE OR REPLACE TEMP TABLE tag_comps AS ' + EMPTY_DOCS)
 
 def assign_idents(source):
     '''Dense identids for the source's first-seen names, in
@@ -652,56 +650,66 @@ def assign_idents(source):
         GROUP BY name''' % source, [next_id])
 
 def ingest_defs(files):
-    ingest_scratch('tag_defs', files, EMPTY_DEFS)
-    # Name gate only: unknown-deftype rows are ingested as ghosts
+    '''One ingest batch of defs chunks: raw rows into the tag's
+    accumulator, the name-gated rows minted and staged. Unknown-deftype
+    rows ingest like any other — the NAME gate alone decides, as in the
+    old DefList keys (ghosts: never displayed, never in def_fams)'''
+    ingest_scratch('tag_defs_batch', files)
+    conn.execute('INSERT INTO tag_defs SELECT * FROM tag_defs_batch')
     conn.execute('''
-        CREATE OR REPLACE TEMP TABLE tag_defs_nameok AS
+        CREATE OR REPLACE TEMP TABLE tag_defs_ok AS
         SELECT name, seq, blobid, defline, deftype, family::deffam AS family
-        FROM tag_defs
+        FROM tag_defs_batch
         WHERE length(name) >= 2 AND name NOT LIKE '~%'
           AND name NOT IN (SELECT unnest(?::VARCHAR[]))''', [ident_blacklist])
-    # The displayable/valid subset: known deftypes only
-    conn.execute('''
-        CREATE OR REPLACE TEMP TABLE tag_defs_mapped AS
-        SELECT * FROM tag_defs_nameok WHERE deftype IN (%s)''' % deftype_list)
-    assign_idents('tag_defs_nameok')
+    assign_idents('tag_defs_ok')
+    conn.execute('INSERT INTO tag_defs_gated SELECT * FROM tag_defs_ok')
     conn.execute('''
         INSERT INTO defs_stage
-        SELECT i.identid, n.blobid, n.defline, n.deftype, n.family
-        FROM tag_defs_nameok n JOIN idents i ON i.name = n.name''')
+        SELECT i.identid, c.blobid, c.defline, c.deftype, c.family
+        FROM tag_defs_ok c JOIN idents i ON i.name = c.name''')
 
 def ingest_docs(files):
-    ingest_scratch('tag_docs', files, EMPTY_DOCS)
-    assign_idents('tag_docs')
+    '''One ingest batch of docs chunks: names minted, rows staged'''
+    ingest_scratch('tag_docs_batch', files)
+    assign_idents('tag_docs_batch')
     conn.execute('''
         INSERT INTO docs_stage
         SELECT i.identid, d.blobid, d.line, d.family::reffam
-        FROM tag_docs d JOIN idents i ON i.name = d.name''')
+        FROM tag_docs_batch d JOIN idents i ON i.name = d.name''')
 
 def ingest_comps(files):
-    ingest_scratch('tag_comps', files, EMPTY_DOCS)
-    assign_idents('tag_comps')
+    '''One ingest batch of comps chunks: names minted, compatible defs
+    rows staged'''
+    ingest_scratch('tag_comps_batch', files)
+    conn.execute('INSERT INTO tag_comps SELECT * FROM tag_comps_batch')
+    assign_idents('tag_comps_batch')
     conn.execute('''
-        CREATE OR REPLACE TEMP TABLE tag_comps_mapped AS
-        SELECT i.identid AS identid, c.blobid AS blobid, c.line AS defline,
-               'compatible' AS deftype, c.family::deffam AS family
-        FROM tag_comps c JOIN idents i ON i.name = c.name''')
-    conn.execute('INSERT INTO defs_stage SELECT * FROM tag_comps_mapped')
+        INSERT INTO defs_stage
+        SELECT i.identid, c.blobid, c.line, 'compatible', c.family::deffam
+        FROM tag_comps_batch c JOIN idents i ON i.name = c.name''')
 
-def ingest_refs(files):
-    ingest_scratch('tag_refs', files, EMPTY_REFS)
-    # defs_idxes, ported: the map of (idx, line) -> ident that the defs
-    # phase built for every ctags line (valid types or not), where a
-    # later line of the same (blob, line) overwrote an earlier one —
-    # arg_max over the workers' write order
+def begin_refs_ingest():
+    '''The (blob, line) -> def-name map the refs gate needs, from the
+    defs phase's accumulated raw rows: every ctags line (valid types
+    or not), where a later line of the same (blob, line) overwrote an
+    earlier one — arg_max over the workers' write order (the
+    defs_idxes dict it ports)'''
     conn.execute('''
         CREATE OR REPLACE TEMP TABLE tag_deflines AS
         SELECT blobid, defline, arg_max(name, seq) AS name
         FROM tag_defs GROUP BY blobid, defline''')
+
+def ingest_refs(files):
+    '''One ingest batch of refs chunks, gated: the ident must have a
+    defs row (any but compatibles — ghost keys included, the old
+    defs_keys set was the KEY set), and a line that defines the same
+    ident is not also a reference to it'''
+    ingest_scratch('tag_refs_batch', files)
     conn.execute('''
         INSERT INTO refs_stage
         SELECT i.identid, r.blobid, r.line, r.family::reffam
-        FROM tag_refs r
+        FROM tag_refs_batch r
         JOIN idents i ON i.name = r.name
         WHERE EXISTS (SELECT 1 FROM defs_all d
                       WHERE d.identid = i.identid
@@ -709,26 +717,31 @@ def ingest_refs(files):
           AND NOT EXISTS (SELECT 1 FROM tag_deflines t
                           WHERE t.blobid = r.blobid AND t.defline = r.line
                             AND t.name = r.name)''')
-    # The defs gate above deliberately matches ghost keys too: the old
-    # defs_keys set was the defs KEY set, unknown types included.
 
 def ingest_comps_docs(files):
-    ingest_scratch('tag_bdocs', files, EMPTY_DOCS)
+    '''One ingest batch of comps_docs chunks: bindings compatibles as
+    doc rows of family B, gated on the compatible having a defs row'''
+    ingest_scratch('tag_bdocs_batch', files)
     conn.execute('''
         INSERT INTO docs_stage
         SELECT i.identid, b.blobid, b.line, 'B'::reffam
-        FROM tag_bdocs b JOIN idents i ON i.name = b.name
+        FROM tag_bdocs_batch b JOIN idents i ON i.name = b.name
         WHERE EXISTS (SELECT 1 FROM defs_all d
                       WHERE d.identid = i.identid
                         AND d.deftype = 'compatible')''')
 
 def update_ident_fams():
     '''idents.def_fams/macro_fams, OR-accumulated from this tag's def
-    rows only (ctags and compatibles both)'''
-    sources = ['SELECT i.identid AS identid, m.deftype AS deftype, m.family AS family '
-               'FROM tag_defs_mapped m JOIN idents i ON i.name = m.name']
+    rows only: name-gated ctags types and compatibles (the type filter
+    drops ghosts). Reading the gated accumulator, not raw defs rows:
+    a blacklisted name can be minted by the docs phase, and its raw
+    rows must not set bits'''
+    sources = ["SELECT i.identid AS identid, d.deftype AS deftype, d.family AS family "
+               "FROM tag_defs_gated d JOIN idents i ON i.name = d.name "
+               "WHERE d.deftype IN (%s)" % deftype_list]
     if dts_comp_support:
-        sources.append('SELECT identid, deftype, family FROM tag_comps_mapped')
+        sources.append("SELECT i.identid, 'compatible', c.family "
+                       "FROM tag_comps c JOIN idents i ON i.name = c.name")
     union = ' UNION ALL '.join(sources)
     conn.execute('''
         CREATE OR REPLACE TEMP TABLE tag_fams AS
@@ -822,31 +835,35 @@ if num_tags:
     log('walk done: %d tags, %d blobs walked, %d new, %s'
         % (num_tags, walked_blobs, total_new, fmt_secs(walk_s)))
 
+# Result unpackers: aggregate a result's counters in the parent (the
+# single writer of the log) and hand back the scratch file's path
+
+def _unpack_defs(result):
+    stderr, path = result
+    collect_ctags_stderr(stderr)
+    return path
+
+def _unpack_docs(result):
+    path, stderr = result
+    collect_ctags_stderr(stderr)
+    return path
+
+def _unpack_refs(result):
+    path, errors, samples = result
+    count_lexer_errors(errors, samples)
+    return path
+
+def _unpack_plain(result):
+    return result[1]
+
 # The run ETA's time base: indexing, not the walk before it
 index_start = time.monotonic()
-
-def run_pool_phase(name, fn, chunks, tag, tag_no, total=None):
-    '''One process-pool phase: the parent consumes the workers' results
-    as they arrive (aggregating the counters they return) and prints
-    all progress itself. Returns the phase's scratch files, in chunk
-    order'''
-    prog = PhaseProgress(tag, name,
-                         sum(len(c) for c in chunks) if total is None else total)
-    items = [(name, tag_no, ci, chunk) for ci, chunk in enumerate(chunks)]
-    files = []
-    done_blobs = 0
-    for item, (stderr, path) in zip(items, refs_pool.imap(fn, items)):
-        collect_ctags_stderr(stderr)
-        files.append(path)
-        done_blobs += len(item[3])
-        prog.update(done_blobs)
-    return files
 
 def index_tag(tag, tag_no):
     '''Index one tag inside its own transaction: every phase's inserts
     and the versions row commit together, so a tag is either fully in
-    the database or not at all. Returns (per-phase seconds, new blob
-    count).'''
+    the database or not at all. Returns (per-phase seconds, ingest
+    seconds, new blob count).'''
     # Per-tag state, so each tag starts clean
     file_paths.clear()
     bindings_idxes.clear()
@@ -860,10 +877,11 @@ def index_tag(tag, tag_no):
 
     times = {}
     ingest_times = {}
-    scratch = []
 
     conn.execute('BEGIN TRANSACTION')
     try:
+        init_tag_tables()
+
         # Phase 1: assign idx numbers to the tag's new blobs
         with PhaseTimer(times, 'ids'):
             idxes, occ_blobids = update_blob_ids(blobs)
@@ -871,6 +889,39 @@ def index_tag(tag, tag_no):
         # Phase 2: versions and the tag's blob paths
         with PhaseTimer(times, 'vers'):
             update_versions(tag, blobs, occ_blobids)
+
+        # One consume loop per phase below: results are aggregated as
+        # they arrive and INGESTED in batches of consecutive arrivals
+        # (chunk order = seq order, so the streaming ingest reproduces
+        # the batched one exactly) once enough scratch has piled up,
+        # while the pool's other workers keep crunching; files are
+        # deleted the moment their batch is ingested
+        def pool_phase(name, fn, chunks_list, unpack, ingest):
+            prog = PhaseProgress(tag, name, sum(len(c) for c in chunks_list))
+            items = [(name, tag_no, ci, chunk)
+                     for ci, chunk in enumerate(chunks_list)]
+            pending = []
+            pending_bytes = 0
+            done_blobs = 0
+            def flush():
+                nonlocal pending_bytes
+                if not pending:
+                    return
+                files = pending[:]
+                with PhaseTimer(ingest_times, name, totals=run_ingest_s):
+                    ingest(files)
+                for path in files:
+                    os.remove(path)
+                del pending[:]
+                pending_bytes = 0
+            for item, result in zip(items, refs_pool.imap(fn, items)):
+                pending.append(unpack(result))
+                pending_bytes += os.path.getsize(pending[-1])
+                done_blobs += len(item[3])
+                if pending_bytes >= ingest_scratch_bytes:
+                    flush()
+                prog.update(done_blobs)
+            flush()
 
         # Phase 3: definitions, doc comments, compatibles — all on the
         # process pool (threads only helped the ctags subprocesses; the
@@ -880,25 +931,19 @@ def index_tag(tag, tag_no):
         work = list(chunks(idxes))
         triple_chunks = [[(idx, new_filenames[idx], new_hashes[idx])
                           for idx in chunk] for chunk in work]
+
         with PhaseTimer(times, 'defs'):
-            files = run_pool_phase('defs', update_definitions, triple_chunks,
-                                   tag, tag_no)
-            with PhaseTimer(ingest_times, 'defs'):
-                ingest_defs(files)
-            scratch += files
+            pool_phase('defs', update_definitions, triple_chunks,
+                       _unpack_defs, ingest_defs)
+
         with PhaseTimer(times, 'docs'):
-            files = update_doc_comments(
-                triple_chunks, tag, tag_no, PhaseProgress(tag, 'docs', len(idxes)))
-            with PhaseTimer(ingest_times, 'docs'):
-                ingest_docs(files)
-            scratch += files
+            pool_phase('docs', _docs_chunk, triple_chunks,
+                       _unpack_docs, ingest_docs)
+
         if dts_comp_support:
             with PhaseTimer(times, 'comps'):
-                files = run_pool_phase('comps', update_compatibles, triple_chunks,
-                                       tag, tag_no)
-                with PhaseTimer(ingest_times, 'comps'):
-                    ingest_comps(files)
-                scratch += files
+                pool_phase('comps', update_compatibles, triple_chunks,
+                           _unpack_plain, ingest_comps)
 
         # Family bitmasks for every ident this tag gave a def (the
         # DefList families blob and the defs caches, as one column)
@@ -909,12 +954,13 @@ def index_tag(tag, tag_no):
         # persistent cat-file --batch pipe.
         refs_chunks = [[(idx, lib.decode(file_paths[idx]), new_hashes[idx])
                         for idx in chunk] for chunk in work]
+
         with PhaseTimer(times, 'refs'):
-            files = update_references(
-                refs_chunks, tag, tag_no, PhaseProgress(tag, 'refs', len(idxes)))
-            with PhaseTimer(ingest_times, 'refs'):
-                ingest_refs(files)
-            scratch += files
+            if refs_chunks:
+                with PhaseTimer(ingest_times, 'refs', totals=run_ingest_s):
+                    begin_refs_ingest()
+            pool_phase('refs', _refs_lex_chunk, refs_chunks,
+                       _unpack_refs, ingest_refs)
 
         # Phase 5: compatibles from bindings documentation (needs all comps)
         if dts_comp_support:
@@ -924,12 +970,10 @@ def index_tag(tag, tag_no):
             bwork = list(chunks([i for i in bindings_idxes if i in new_hashes]))
             bchunks = [[(idx, file_paths[idx], new_hashes[idx])
                         for idx in chunk] for chunk in bwork]
+
             with PhaseTimer(times, 'comps_docs'):
-                files = run_pool_phase('comps_docs', update_compatibles_bindings,
-                                       bchunks, tag, tag_no)
-                with PhaseTimer(ingest_times, 'comps_docs'):
-                    ingest_comps_docs(files)
-                scratch += files
+                pool_phase('comps_docs', update_compatibles_bindings,
+                           bchunks, _unpack_plain, ingest_comps_docs)
 
         # Commit the tag: only now is it visible. A crash before this
         # point rolls the whole tag back; the next run re-indexes it.
@@ -938,9 +982,6 @@ def index_tag(tag, tag_no):
         conn.execute('ROLLBACK')
         raise
 
-    for path in scratch: # ingested; nothing reads them again
-        os.remove(path)
-
     return times, ingest_times, len(idxes)
 
 done_tags = 0
@@ -948,8 +989,6 @@ done_blobs = 0
 
 for tag_no, tag in enumerate(tag_buf, 1):
     times, ingest_times, blobs = index_tag(tag, tag_no)
-    for p, s in ingest_times.items():
-        run_ingest_s[p] += s
     done_tags += 1
     done_blobs += blobs
 
