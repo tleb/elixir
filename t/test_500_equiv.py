@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -56,6 +57,12 @@ def pinned_env(testenv):
             os.environ[k] = v
 
 
+# Capture records the tree's git provenance (commit, branch, dirty);
+# skip cleanly where the tree is .git-less (e.g. the Docker image)
+# instead of failing. Real checkouts keep full provenance.
+@pytest.mark.skipif(not os.path.exists(os.path.join(common.REPO_ROOT, '.git')),
+                    reason=f'{common.REPO_ROOT} is not a git worktree '
+                           '(no provenance to record)')
 def test_capture_replay_roundtrip_and_sensitivity(tmp_path, pinned_env):
     """Gate 1/2/3 of T-E1, at pytest scale: determinism of the pipeline,
     zero-diff replay against the same side, and one-byte sensitivity"""
