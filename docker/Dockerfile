@@ -1,19 +1,4 @@
-FROM debian:bookworm AS build
-
-RUN \
-  apt-get update && \
-  apt-get --no-install-recommends -y install \
-    git build-essential pkg-config autoconf automake \
-    python3 python3-pip python3-dev python3-docutils \
-    libseccomp-dev libjansson-dev libyaml-dev libxml2-dev
-
-WORKDIR /build-ctags/
-
-RUN git clone --branch v6.1.0 --depth 1 https://github.com/universal-ctags/ctags.git
-WORKDIR ctags
-RUN ./autogen.sh && ./configure && make -j $(nproc)
-
-FROM debian:bookworm
+FROM debian:forky
 
 RUN \
   apt-get update && \
@@ -24,8 +9,7 @@ RUN \
     git \
     apache2 \
     libapache2-mod-wsgi-py3 \
-    libjansson4 \
-    libyaml-0-2 \
+    universal-ctags \
     wget
 
 COPY ./requirements.txt /usr/local/elixir/
@@ -35,8 +19,6 @@ WORKDIR /usr/local/elixir/
 RUN python3 -m venv venv && \
     . ./venv/bin/activate && \
     pip install -r requirements.txt
-
-COPY --from=build /build-ctags/ctags/ctags /usr/bin/ctags
 
 RUN mkdir -p /srv/elixir-data/
 
