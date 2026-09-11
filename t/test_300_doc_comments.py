@@ -47,30 +47,25 @@ def docs(query, ident):
 # Spot-check some identifiers
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_doc_comment_query_nonexistent(query):
     assert docs(query, 'SOME_NONEXISTENT_IDENTIFIER_XYZZY_PLUGH') == []
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_not_documented(query):
     # in drivers/i2c/i2c-core-acpi.c
     assert docs(query, 'gsb_buffer') == []
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_documented_function(query):
     assert docs(query, 'i2c_acpi_get_i2c_resource') == \
         [('drivers/i2c/i2c-core-acpi.c', '45')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_documented_function_102(query):
     # #102: doc comment associated despite intervening plain comments
     assert docs(query, 'documented_function_XYZZY') == [('issue102.c', '6')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_documented_function_cbus_driver(query):
     # kernel-doc in the real v7.3-rc2 driver (provenance in README.adoc)
     assert docs(query, 'cbus_send_bit') == \
@@ -80,37 +75,31 @@ def test_documented_function_cbus_driver(query):
 # Non-functions
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_enum_documented(query):
     assert docs(query, 'memblock_flags') == [('include/linux/memblock.h', '28')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_enum_not_documented(query):
     # uapi/linux/rseq.h:16
     assert docs(query, 'rseq_cpu_id_state') == []
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_struct_documented(query):
     assert docs(query, 'memblock_region') == \
         [('include/linux/memblock.h', '42')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_struct_not_documented(query):
     # eventpoll.h:77
     assert docs(query, 'epoll_event') == []
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_macro_documented(query):
     # Multiline macro: the doc search starts back at the #define line
     assert docs(query, 'for_each_mem_range') == \
         [('include/linux/memblock.h', '148')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_macro_not_documented(query):
     # memblock.h:343
     assert docs(query, 'MEMBLOCK_LOW_LIMIT') == []
@@ -119,19 +108,16 @@ def test_macro_not_documented(query):
 # Specific cases from #134: nonstandard doc comments
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_nonstandard_doc_comment_134(query):
     # Like regmap_update_bits_base()
     assert docs(query, 'issue134_function1') == [('issue134.c', '9')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_nonstandard_doc_comment2_134(query):
     # Like wait_for_completion()
     assert docs(query, 'issue134_function2') == [('issue134.c', '25')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_prototype_documented_134(query):
     # Like v4l2_fwnode_endpoint_parse()
     assert docs(query, 'issue134_function3') == [('issue134.c', '38')]
@@ -146,12 +132,10 @@ def test_no_warnings_186():
     assert parse.parse_doc_comments((TREE / 'issue186.c').read_bytes()) == []
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_documented_function_186(query):
     assert docs(query, 'i186c_fn1') == [('issue186-counterexamples.c', '5')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_documented_macro_186(query):
     assert docs(query, 'i186c_fn2') == [('issue186-counterexamples.c', '20')]
 
@@ -166,11 +150,9 @@ def test_no_warnings_188():
 # #192: return type on the line before the function name
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_type_on_preceding_line_192(query):
     assert docs(query, 'issue192a') == [('issue192.c', '5')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_uppercase_type_on_preceding_line_192(query):
     assert docs(query, 'issue192b') == [('issue192.c', '15')]

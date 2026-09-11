@@ -17,11 +17,9 @@
 #  You should have received a copy of the GNU Affero General Public License
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
-from urllib import parse
-from berkeleydb.db import DB_SET_RANGE
 import falcon
 
-from .lib import autoBytes, validFamily
+from .lib import validFamily
 from .query import get_query
 from .web_utils import validate_project, validate_ident
 
@@ -47,36 +45,11 @@ class AutocompleteResource:
             resp.status = falcon.HTTP_NOT_FOUND
             return
 
-        if family == 'B':
-            # DTS identifiers are stored quoted
-            process = lambda x: parse.unquote(x)
-            db = query.db.comps
-        else:
-            process = lambda x: x
-            db = query.db.defs
-
-        response = []
-
-        i = 0
-        cur = db.db.cursor()
-        query_bytes = autoBytes(parse.quote(ident_prefix))
-        # Find "the smallest key greater than or equal to the specified key"
-        # https://docs.oracle.com/cd/E17276_01/html/api_reference/C/dbcget.html
-        # In practice this should mean "the key that starts with provided prefix"
-        # See docs about the default comparison function for B-Tree databases:
-        # https://docs.oracle.com/cd/E17276_01/html/api_reference/C/dbset_bt_compare.html
-        result = cur.get(query_bytes, DB_SET_RANGE)
-        while result is not None and i < 10:
-            key, _ = result
-            if key.startswith(query_bytes):
-                # If found key starts with the prefix, add to response
-                # and move to the next key
-                i += 1
-                response.append(process(key.decode("utf-8")))
-                result = cur.next()
-            else:
-                # If found key does not start with the prefix, stop
-                break
+        # The prefix scan over the definitions/compatibles keys lives in
+        # Query now (the storage layer's byte-order DB_SET_RANGE
+        # equivalent, max 10 keys, keys URL-quoted like they are stored;
+        # family B keys come back unquoted)
+        response = query.autocomplete_keys(ident_prefix, family)
 
         resp.status = falcon.HTTP_200
         resp.content_type = falcon.MEDIA_JSON

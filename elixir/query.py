@@ -18,10 +18,28 @@
 #  You should have received a copy of the GNU Affero General Public License
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
+# Read path over the DuckDB storage (elixir/data_duckdb.py). The API is
+# the one the BDB layer served (web.py, api.py, autocomplete.py and the
+# filters are its consumers); every serialization quirk of the merge-scan
+# era is reproduced on purpose and commented where it hides:
+#
+# - defs attach to a blob's FIRST path in a version (the old merge scan
+#   consumed a blob's definitions at its first PathList entry, which was
+#   sorted by (blob id, path)), while refs and docs appear under EVERY
+#   path the blob occurs at.
+# - display family filtering follows lib.compatibleFamily /
+#   compatibleMacro, which see family COMPATIBILITY, not equality (a C
+#   query shows C and K references; an M query shows K references).
+# - /** doc comments of one ident in one file were multiple RefList
+#   entries appended in DESCENDING line order, and the scan kept only
+#   the first — so the doc line shown is the HIGHEST line of the file.
+# - the API/web line fields of refs and compatibles are the BDB RefList
+#   comma-joined line strings; defs lines are ints (per the templates).
+
 from .lib import decode, tokenizeFile
 from . import lib
 from . import repo
-from . import data
+from . import data_duckdb as dd
 import os
 from collections import OrderedDict
 from urllib import parse
@@ -45,7 +63,7 @@ class SymbolInstance(object):
         return self.__repr__()
 
 # Returns a Query class instance or None if project data directory does not exist
-# basedir: absolute path to parent directory of all project data directories, ex. "/srv/elixir-data/"
+# basedir: absolute path to parent directory of all project data directories, ex: "/srv/elixir-data/"
 # project: name of the project, directory in basedir, ex. "linux"
 def get_query(basedir, project):
     datadir = basedir + '/' + project + '/data'
@@ -64,16 +82,43 @@ class Query:
         # repository directory's parent
         self.project = os.path.basename(os.path.dirname(repo_dir))
         self.dts_comp_support = int(self.project in repo.DTS_COMP_SUPPORT)
-        self.db = data.DB(data_dir, readonly=True, dtscomp=self.dts_comp_support)
+        self.db = dd.connect_ro(os.path.join(data_dir, 'data.duckdb'))
         self.file_cache = {}
+        self._tag_cache = {}       # tag -> versionid or None
+        self._tags = None          # set of the database's tags
+        self._mark_sets = {}       # family -> token mark set (defs_cache-*)
 
     def close(self):
         self.db.close()
 
+    def _tags_in_db(self):
+        if self._tags is None:
+            self._tags = set(row[0] for row in
+                             self.db.execute('SELECT tag FROM versions').fetchall())
+        return self._tags
+
+    def _versionid(self, version):
+        # None when the version is not in the database (the old
+        # db.vers.exists)
+        try:
+            return self._tag_cache[version]
+        except KeyError:
+            row = self.db.execute(
+                'SELECT versionid FROM versions WHERE tag = ?',
+                [version]).fetchone()
+            versionid = row[0] if row is not None else None
+            self._tag_cache[version] = versionid
+            return versionid
+
     # Check if a dts compatible string exists
     def dts_comp_exists(self, ident):
         if self.dts_comp_support:
-            return self.db.comps.exists(ident)
+            # ident arrives URL-quoted, the stored form (the old db.comps)
+            return self.db.execute(
+                "SELECT EXISTS (SELECT 1 FROM defs d JOIN idents i"
+                " ON i.identid = d.identid"
+                " WHERE i.name = ? AND d.deftype = 'compatible')",
+                [ident]).fetchone()[0]
         else:
             return False
 
@@ -81,17 +126,39 @@ class Query:
     def file_exists(self, version, path):
         if version not in self.file_cache:
             version_cache = set()
-            last_dir = None
-            for _, file_path in self.db.vers.get(version).iter():
-                dirname, filename = os.path.split(file_path)
-                if dirname != last_dir:
-                    last_dir = dirname
-                    version_cache.add(dirname)
-                version_cache.add(file_path)
+            for (filepath,) in self.db.execute(
+                    'SELECT vo.filepath FROM version_objects vo'
+                    ' JOIN versions v ON v.versionid = vo.versionid'
+                    ' WHERE v.tag = ?', [version]).fetchall():
+                dirname, filename = os.path.split(filepath)
+                version_cache.add(dirname)
+                version_cache.add(filepath)
 
             self.file_cache[version] = version_cache
 
         return path.strip('/') in self.file_cache[version]
+
+    # The defs_cache-* membership of the BDB layer: which idents have a
+    # definition compatible with a file family (generate_defs_caches
+    # applied lib.compatibleFamily/compatibleMacro to db.defs records).
+    # Compatibles never qualified (they lived in db.comps, not db.defs).
+    _DEFS_CACHE_SQL = {
+        'C': "d.family IN ('C', 'K')",
+        'K': "d.family = 'K'",
+        'D': "(d.family = 'D' OR (d.family = 'C' AND d.deftype = 'macro'))",
+        'M': "d.family = 'K'",
+    }
+
+    def _mark_set(self, family):
+        marks = self._mark_sets.get(family)
+        if marks is None:
+            marks = set(row[0] for row in self.db.execute(
+                'SELECT DISTINCT i.name FROM idents i JOIN defs d'
+                ' ON d.identid = i.identid'
+                " WHERE d.deftype <> 'compatible' AND "
+                + self._DEFS_CACHE_SQL[family]).fetchall())
+            self._mark_sets[family] = marks
+        return marks
 
     # Returns the contents of the specified file
     # Tokens are marked for further processing
@@ -102,6 +169,8 @@ class Query:
 
         if family != None:
             assert family in lib.CACHED_DEFINITIONS_FAMILIES, f"family {family} must have its definitions cached"
+
+            marks = self._mark_set(family)
 
             buffer = BytesIO()
             tokens = tokenizeFile(self.repo_dir, self.project, version, path, family)
@@ -114,7 +183,7 @@ class Query:
             for tok in tokens:
                 even = not even
                 tok2 = prefix + tok
-                if even and self.db.defs_cache[family].exists(tok2):
+                if even and decode(tok2) in marks:
                     tok = b'\033[31m' + tok2 + b'\033[0m'
                 else:
                     tok = lib.unescape(tok)
@@ -134,6 +203,7 @@ class Query:
     def get_versions(self):
         versions = OrderedDict()
 
+        tags_in_db = self._tags_in_db()
         for line in repo.list_tags_h(self.repo_dir, self.project):
             taginfo = decode(line).split(' ')
             num = len(taginfo)
@@ -148,7 +218,7 @@ class Query:
             else:
                 raise Exception("unexpected number of fields in taginfo")
 
-            if self.db.vers.exists(tag):
+            if tag in tags_in_db:
                 if topmenu not in versions:
                     versions[topmenu] = OrderedDict()
                 if submenu not in versions[topmenu]:
@@ -182,8 +252,9 @@ class Query:
         else:
             sorted_tags = repo.latest_tags(self.repo_dir, self.project)
 
+        tags_in_db = self._tags_in_db()
         for tag in sorted_tags:
-            if self.db.vers.exists(tag):
+            if tag.decode() in tags_in_db:
                 return tag.decode()
 
         # return the oldest tag, even if it does not exist in the database
@@ -191,6 +262,48 @@ class Query:
 
     def get_file_raw(self, version, path):
         return decode(repo.get_file(self.repo_dir, self.project, version, path))
+
+    # The families of ref rows a family query shows. The old call was
+    # lib.compatibleFamily(family, ref_family) — arguments swapped
+    # against the helper's (file_family, requested_family) signature —
+    # so the effective test is: the QUERY family in the REF family's
+    # compatibility list (frozen upstream behavior):
+    #   C query: C and K refs   K query: K and M refs
+    #   D query: D refs         M query: no refs at all ('M' is in no
+    #                            compatibility list)
+    _REF_FAMS = {
+        'A': None,                       # no filter
+        'C': "r.family IN ('C', 'K')",
+        'K': "r.family IN ('K', 'M')",
+        'D': "r.family = 'D'",
+        'M': 'FALSE',
+    }
+
+    def autocomplete_keys(self, ident_prefix, family):
+        # The old /acp: a DB_SET_RANGE prefix scan in BDB's memcmp byte
+        # order over the definitions keys (or the compatibles for family
+        # B), at most 10 keys. DuckDB VARCHAR comparison is bytewise
+        # (UTF-8 memcmp), which matches BDB for these ASCII keys; the
+        # high-byte test in the suite pins it.
+        if family == 'B':
+            if not self.dts_comp_support:
+                # Preserved quirk: the old data.DB had no comps database
+                # for projects without dts support, and the /acp handler
+                # died on query.db.comps — a 500 exactly like then.
+                raise AttributeError('comps')
+            process = parse.unquote
+            cond = "d.deftype = 'compatible'"
+        else:
+            process = lambda x: x
+            cond = "d.deftype <> 'compatible'"
+
+        prefix = parse.quote(ident_prefix)
+        rows = self.db.execute(
+            'SELECT i.name FROM idents i WHERE starts_with(i.name, ?)'
+            ' AND EXISTS (SELECT 1 FROM defs d WHERE d.identid = i.identid'
+            ' AND ' + cond + ') ORDER BY i.name LIMIT 10',
+            [prefix]).fetchall()
+        return [process(name) for (name,) in rows]
 
     def get_idents_comps(self, version, ident):
 
@@ -205,47 +318,55 @@ class Query:
         # DT compatible strings are quoted in the database
         ident = parse.quote(ident)
 
-        if not self.dts_comp_support or not self.db.comps.exists(ident):
+        if not self.dts_comp_support:
             return symbol_c, symbol_dts, symbol_docs, False
 
-        files_this_version = self.db.vers.get(version).iter()
-        comps = self.db.comps.get(ident).iter(dummy=True)
+        # db.comps.exists: compatibles are defs rows of deftype
+        # 'compatible' (family C = defined in C, D = used in DT)
+        row = self.db.execute(
+            'SELECT i.identid FROM idents i WHERE i.name = ? AND'
+            " EXISTS (SELECT 1 FROM defs d WHERE d.identid = i.identid"
+            " AND d.deftype = 'compatible')", [ident]).fetchone()
+        if row is None:
+            return symbol_c, symbol_dts, symbol_docs, False
+        identid = row[0]
 
-        if self.db.comps_docs.exists(ident):
-            comps_docs = self.db.comps_docs.get(ident).iter(dummy=True)
-        else:
-            comps_docs = data.RefList().iter(dummy=True)
+        versionid = self._versionid(version)
+        if versionid is None:
+            # The old code called db.vers.get(version).iter() on None
+            # here and died with AttributeError — same 500, kept.
+            raise AttributeError(version)
 
-        comps_idx, comps_lines, comps_family = next(comps)
-        comps_docs_idx, comps_docs_lines, comps_docs_family = next(comps_docs)
-        compsCBuf = [] # C/CPP/ASM files
-        compsDBuf = [] # DT files
-        compsBBuf = [] # DT bindings docs files
+        # Every path a blob occurs at lists its lines (the merge scan's
+        # per-occurrence if), comma-joined like the RefList stored them
+        for family, buf in (('C', symbol_c), ('D', symbol_dts)):
+            rows = self.db.execute(
+                "SELECT vo.filepath,"
+                " string_agg(CAST(d.defline AS VARCHAR), ',' ORDER BY d.defline)"
+                " FROM defs d JOIN version_objects vo"
+                " ON vo.versionid = ? AND vo.blobid = d.blobid"
+                " WHERE d.identid = ? AND d.deftype = 'compatible'"
+                " AND d.family = '" + family + "'"
+                " GROUP BY vo.blobid, vo.filepath ORDER BY vo.filepath",
+                [versionid, identid]).fetchall()
+            for path, lines in rows:
+                if family == 'C':
+                    buf.append(SymbolInstance(path, lines, 'compatible'))
+                else:
+                    buf.append(SymbolInstance(path, lines))
 
-        for file_idx, file_path in files_this_version:
-            while comps_idx < file_idx:
-                comps_idx, comps_lines, comps_family = next(comps)
-
-            while comps_docs_idx < file_idx:
-                comps_docs_idx, comps_docs_lines, comps_docs_family = next(comps_docs)
-
-            if comps_idx == file_idx:
-                if comps_family == 'C':
-                    compsCBuf.append((file_path, comps_lines))
-                elif comps_family == 'D':
-                    compsDBuf.append((file_path, comps_lines))
-
-            if comps_docs_idx == file_idx:
-                compsBBuf.append((file_path, comps_docs_lines))
-
-        for path, cline in sorted(compsCBuf):
-            symbol_c.append(SymbolInstance(path, cline, 'compatible'))
-
-        for path, dlines in sorted(compsDBuf):
-            symbol_dts.append(SymbolInstance(path, dlines))
-
-        for path, blines in sorted(compsBBuf):
-            symbol_docs.append(SymbolInstance(path, blines))
+        # DT bindings documentation: docs rows of family B
+        # (compatibledts_docs.db)
+        rows = self.db.execute(
+            "SELECT vo.filepath,"
+            " string_agg(CAST(dc.line AS VARCHAR), ',' ORDER BY dc.line)"
+            " FROM docs dc JOIN version_objects vo"
+            ' ON vo.versionid = ? AND vo.blobid = dc.blobid'
+            " WHERE dc.identid = ? AND dc.family = 'B'"
+            ' GROUP BY vo.blobid, vo.filepath ORDER BY vo.filepath',
+            [versionid, identid]).fetchall()
+        for path, lines in rows:
+            symbol_docs.append(SymbolInstance(path, lines))
 
         return symbol_c, symbol_dts, symbol_docs, True
 
@@ -255,73 +376,76 @@ class Query:
         symbol_references = []
         symbol_doccomments = []
 
-        if not self.db.defs.exists(ident):
+        # db.defs.exists: a real definition (compatibles lived in
+        # db.comps; docs-only and refs-only names were never defs keys)
+        row = self.db.execute(
+            'SELECT i.identid, i.macro_fams, EXISTS ('
+            '  SELECT 1 FROM defs d WHERE d.identid = i.identid'
+            "  AND d.deftype <> 'compatible')"
+            ' FROM idents i WHERE i.name = ?', [ident]).fetchone()
+        if row is None or not row[2]:
             return symbol_definitions, symbol_references, symbol_doccomments, False
+        identid, macro_fams = row[0], row[1]
 
-        if not self.db.vers.exists(version):
+        versionid = self._versionid(version)
+        if versionid is None:
             return symbol_definitions, symbol_references, symbol_doccomments, True
 
-        files_this_version = self.db.vers.get(version).iter()
-        this_ident = self.db.defs.get(ident)
-        defs_this_ident = this_ident.iter(dummy=True)
-        macros_this_ident = this_ident.get_macros()
-        # FIXME: see why we can have a discrepancy between defs_this_ident and refs
-        if self.db.refs.exists(ident):
-            refs = self.db.refs.get(ident).iter(dummy=True)
+        # Which def rows a family query shows: def_family == family, or
+        # any row at all when the ident has a macro the family is
+        # compatible with (compatibleMacro is ident-level, not per row)
+        if family == 'A':
+            def_cond, def_params = 'TRUE', []
+        elif family == 'D':
+            has_c_macro = macro_fams is not None and bool(macro_fams & dd.FAM_BITS['C'])
+            def_cond, def_params = '(d.family = ? OR ?)', ['D', has_c_macro]
         else:
-            refs = data.RefList().iter(dummy=True)
+            def_cond, def_params = 'd.family = ?', [family]
 
-        if self.db.docs.exists(ident):
-            docs = self.db.docs.get(ident).iter(dummy=True)
-        else:
-            docs = data.RefList().iter(dummy=True)
+        # Definitions, under each blob's first path only: the PathList
+        # was sorted by (blob id, path) and the merge scan consumed a
+        # blob's definitions at its first entry. Ordering: type
+        # reverse-alphabetical, then path, then line (dBuf.sort() plus
+        # the stable type-descending sort).
+        rows = self.db.execute(
+            'SELECT vo.filepath, d.deftype, d.defline'
+            ' FROM defs d JOIN ('
+            '   SELECT blobid, min(filepath) AS filepath FROM version_objects'
+            '   WHERE versionid = ? GROUP BY blobid'
+            ' ) vo ON vo.blobid = d.blobid'
+            ' WHERE d.identid = ? AND d.deftype <> \'compatible\''
+            '   AND ' + def_cond +
+            ' ORDER BY d.deftype DESC, vo.filepath, d.defline',
+            [versionid, identid] + def_params).fetchall()
+        for path, type, line in rows:
+            symbol_definitions.append(SymbolInstance(path, line, type))
 
-        # vers, defs, refs, and docs are all populated by update.py in order of
-        # idx, and there is a one-to-one mapping between blob hashes and idx
-        # values.  Therefore, we can sequentially step through the defs, refs,
-        # and docs for each file in a version.
+        # References, one comma-joined line string per occurrence
+        ref_fams = self._REF_FAMS[family]
+        rows = self.db.execute(
+            'SELECT vo.filepath,'
+            " string_agg(CAST(r.refline AS VARCHAR), ',' ORDER BY r.refline)"
+            ' FROM refs r JOIN version_objects vo'
+            ' ON vo.versionid = ? AND vo.blobid = r.blobid'
+            ' WHERE r.identid = ?'
+            + ('' if ref_fams is None else ' AND ' + ref_fams)
+            + ' GROUP BY vo.blobid, vo.filepath ORDER BY vo.filepath',
+            [versionid, identid]).fetchall()
+        for path, lines in rows:
+            symbol_references.append(SymbolInstance(path, lines))
 
-        def_idx, def_type, def_line, def_family = next(defs_this_ident)
-        ref_idx, ref_lines, ref_family = next(refs)
-        doc_idx, doc_line, doc_family = next(docs)
-
-        dBuf = []
-        rBuf = []
-        docBuf = []
-
-        for file_idx, file_path in files_this_version:
-            # Advance defs, refs, and docs to the current file
-            while def_idx < file_idx:
-                def_idx, def_type, def_line, def_family = next(defs_this_ident)
-            while ref_idx < file_idx:
-                ref_idx, ref_lines, ref_family = next(refs)
-            while doc_idx < file_idx:
-                doc_idx, doc_line, doc_family = next(docs)
-
-            # Copy information about this identifier into dBuf, rBuf, and docBuf.
-            while def_idx == file_idx:
-                if (def_family == family or family == 'A'
-                    or lib.compatibleMacro(macros_this_ident, family)):
-                    dBuf.append((file_path, def_type, def_line))
-                def_idx, def_type, def_line, def_family = next(defs_this_ident)
-
-            if ref_idx == file_idx:
-                if lib.compatibleFamily(family, ref_family) or family == 'A':
-                    rBuf.append((file_path, ref_lines))
-
-            if doc_idx == file_idx: # TODO should this be a `while`?
-                docBuf.append((file_path, doc_line))
-
-        # Sort dBuf by path name before sorting by type in the loop
-        dBuf.sort()
-
-        for path, type, dline in sorted(dBuf, key=lambda d: d[1], reverse=True):
-            symbol_definitions.append(SymbolInstance(path, dline, type))
-
-        for path, rlines in sorted(rBuf):
-            symbol_references.append(SymbolInstance(path, rlines))
-
-        for path, docline in sorted(docBuf):
-            symbol_doccomments.append(SymbolInstance(path, docline))
+        # /** doc comments (docs rows of the file's own family — B rows
+        # are the bindings docs of get_idents_comps). The old RefList
+        # held one entry per line in descending order and the scan kept
+        # only the first: the highest line of the file is the one shown.
+        rows = self.db.execute(
+            'SELECT vo.filepath, CAST(max(dc.line) AS VARCHAR)'
+            ' FROM docs dc JOIN version_objects vo'
+            ' ON vo.versionid = ? AND vo.blobid = dc.blobid'
+            " WHERE dc.identid = ? AND dc.family <> 'B'"
+            ' GROUP BY vo.blobid, vo.filepath ORDER BY vo.filepath',
+            [versionid, identid]).fetchall()
+        for path, line in rows:
+            symbol_doccomments.append(SymbolInstance(path, line))
 
         return symbol_definitions, symbol_references, symbol_doccomments, True

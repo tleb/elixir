@@ -5,12 +5,13 @@ from elixir.query import Query
 from elixir import lib
 
 def cmd_stats(q, **kwargs):
-    print("Versions: ", len(q.db.vers))
-    print("Blobs: ", len(q.db.blob))
-    if len(q.db.blob) != len(q.db.hash) or len(q.db.hash) != len(q.db.file):
-        print("Warning, number of blobs, hashes or files is not equal")
-    print("Definitions: ", len(q.db.defs))
-    print("References: ", len(q.db.refs))
+    db = q.db
+    print("Versions: ", db.execute('SELECT count(*) FROM versions').fetchone()[0])
+    print("Blobs: ", db.execute('SELECT count(*) FROM blobs').fetchone()[0])
+    print("Definitions: ", db.execute(
+        "SELECT count(DISTINCT identid) FROM defs WHERE deftype <> 'compatible'").fetchone()[0])
+    print("References: ", db.execute(
+        'SELECT count(DISTINCT identid) FROM refs').fetchone()[0])
 
 def cmd_versions(q, **kwargs):
     for major in q.get_versions().values():

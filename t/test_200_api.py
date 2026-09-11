@@ -22,10 +22,6 @@
 
 import pytest
 
-# update.py writes DuckDB now; the falcon app still reads BDB through
-# query.py until the T-Q read-path port, so these stay skipped
-pytestmark = pytest.mark.skip(reason='pending T-Q read-path port')
-
 
 def get(client, ident, query_string):
     return client.simulate_get(f'/api/ident/testproj/{ident}',

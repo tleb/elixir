@@ -317,13 +317,11 @@ def test_update_log_format(build_env, tmp_path):
 
 
 # Spot-check some identifiers
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_nonexistent(query):
     defs, refs, docs, exists = search(query, 'SOME_NONEXISTENT_IDENTIFIER_XYZZY_PLUGH', 'C')
     assert not exists and defs == [] and refs == [] and docs == []
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_i2c_acpi_notify(query):
     defs, refs, docs, exists = search(query, 'i2c_acpi_notify', 'C')
     assert exists
@@ -331,7 +329,6 @@ def test_ident_i2c_acpi_notify(query):
     assert refs == [('drivers/i2c/i2c-core-acpi.c', '439')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_class_131(query):
     # #131: definitions and references in headers work
     defs, refs, docs, exists = search(query, 'class', 'C')
@@ -340,7 +337,6 @@ def test_ident_class_131(query):
     assert ('issue131.h', '13') in refs
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_memset_150(query):
     # #150: definitions in assembly are found
     defs, refs, docs, exists = search(query, 'memset', 'C')
@@ -349,21 +345,18 @@ def test_ident_memset_150(query):
     assert ('drivers/i2c/i2c-core-acpi.c', '121,185,344,473') in refs
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_hypercall_paste_150(query):
     # #150: ENTRY(HYPERVISOR_##hypercall) is not a definition
     defs, refs, docs, exists = search(query, 'HYPERVISOR_##hypercall', 'C')
     assert not any('hypercall.S' in p for p, _, _ in defs)
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_hex_number_150(query):
     # #150: numbers are not definitions
     defs, refs, docs, exists = search(query, '0xfffffffe', 'C')
     assert not any('bcm74xx_sprom.c' in p for p, _, _ in defs)
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_syscall_define_228(query):
     # #228: SYSCALL_DEFINE produces sys_* definitions
     defs, refs, docs, exists = search(query, 'sys_init_module', 'C')
@@ -373,14 +366,12 @@ def test_ident_syscall_define_228(query):
 # Kconfig options: definitions from Kconfig files, references from
 # Makefiles (family M) and Kconfig files (family K), including files
 # in subdirectories
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_kconfig_option(query):
     defs, refs, docs, exists = search(query, 'CONFIG_TESTOPT_FOO', 'K')
     assert defs == [('Kconfig', 2, 'config')]
     assert refs == [('Makefile', '3'), ('drivers/Kconfig', '4'), ('drivers/Makefile', '4')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_kconfig_option_subdir(query):
     defs, refs, docs, exists = search(query, 'CONFIG_TESTOPT_BAR', 'K')
     assert defs == [('drivers/Kconfig', 2, 'config')]
@@ -389,7 +380,6 @@ def test_ident_kconfig_option_subdir(query):
 
 # Devicetree: labels are definitions, phandle references are references
 # (across .dts/.dtsi files)
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_dts_label_and_reference(query):
     defs, refs, docs, exists = search(query, 'led0', 'D')
     assert exists
@@ -405,7 +395,6 @@ def test_ident_dts_label_and_reference(query):
 # DT compatible strings (family B): defined by .compatible = "..." in C
 # files, used in .dts files, documented under Documentation/devicetree/
 # bindings (populated only for strings that exist as comps)
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_compatible_c_dts_and_bindings(query):
     defs, refs, docs, exists = search(query, 'vendor,thing', 'B')
     assert exists
@@ -413,7 +402,6 @@ def test_compatible_c_dts_and_bindings(query):
     assert docs == [('Documentation/devicetree/bindings/vendor,thing.yaml', '4,19')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_compatible_dts_only(query):
     defs, refs, docs, exists = search(query, 'vendor,testproj-board', 'B')
     assert exists
@@ -425,7 +413,6 @@ def test_compatible_dts_only(query):
 # The real n8x0 devicetrees: labels defined in the SoC dtsi are
 # referenced from the shared board dtsi and the board dts files, as
 # phandles (&gpioN inside <...>) and as whole-node references (&mcbsp2)
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_dts_label_soci_referenced_by_board_files(query):
     defs, refs, docs, exists = search(query, 'gpio3', 'D')
     assert exists
@@ -440,7 +427,6 @@ def test_ident_dts_label_soci_referenced_by_board_files(query):
                     ('arch/arm/boot/dts/ti/omap/omap2420-n8x0-common.dtsi', '25,121')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_dts_label_node_reference(query):
     # &mcbsp2: a whole-node override of a SoC peripheral in the board dts
     defs, refs, docs, exists = search(query, 'mcbsp2', 'D')
@@ -459,7 +445,6 @@ def test_ident_dts_label_node_reference(query):
 # (the add_family canonical-order case the linux determinism runs found
 # on gpio_clk/i2c0_clk/i2c1_clk; testproj-i2c.dts authors the collision,
 # as struct i2c_dev already exists in the real i2c-dev.c)
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_ident_dts_label_and_c_definition(query, testenv):
     defs, refs, docs, exists = search(query, 'i2c_dev', 'A')
     assert exists
@@ -473,19 +458,21 @@ def test_ident_dts_label_and_c_definition(query, testenv):
     assert defs == [('arch/arm/boot/dts/testproj-i2c.dts', 14, 'label')]
     assert refs == []
 
-    # the stored record itself carries both families
-    db = data.DB(testenv.data_dir, readonly=True, dtscomp=False)
+    # the stored record itself carries both families (idents.def_fams,
+    # the bitmask that replaced the DefList families blob)
+    from elixir import data_duckdb as dd
+    conn = dd.connect_ro(str(Path(testenv.data_dir) / 'data.duckdb'))
     try:
-        assert db.defs.get('i2c_dev').get_families() == ['C', 'D']
+        fams = conn.execute("SELECT def_fams FROM idents WHERE name = 'i2c_dev'").fetchone()
+        assert fams == (dd.FAM_BITS['C'] | dd.FAM_BITS['D'],)
     finally:
-        db.close()
+        conn.close()
 
 
 # The real compatible-string triangles: defined by a C driver match
 # table, used by the real devicetrees, documented under bindings/ (the
 # CBUS and Retu strings even have TWO documents each: their own binding
 # and the other binding's example)
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_compatible_i2c_cbus_gpio(query):
     defs, refs, docs, exists = search(query, 'i2c-cbus-gpio', 'B')
     assert exists
@@ -495,7 +482,6 @@ def test_compatible_i2c_cbus_gpio(query):
                     ('Documentation/devicetree/bindings/mfd/retu.txt', '16')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_compatible_nokia_retu(query):
     defs, refs, docs, exists = search(query, 'nokia,retu', 'B')
     assert exists
@@ -505,7 +491,6 @@ def test_compatible_nokia_retu(query):
                     ('Documentation/devicetree/bindings/mfd/retu.txt', '9,19')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_compatible_regulator_fixed_yaml(query):
     # the .yaml side of the bindings mix (the .txt side is above)
     defs, refs, docs, exists = search(query, 'regulator-fixed', 'B')
@@ -515,7 +500,6 @@ def test_compatible_regulator_fixed_yaml(query):
     assert docs == [('Documentation/devicetree/bindings/regulator/fixed-regulator.yaml', '53,126')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_compatible_driver_and_bindings_without_dts(query):
     'match-table strings no devicetree in the tree uses'
     defs, refs, docs, exists = search(query, 'nokia,tahvo', 'B')
@@ -531,7 +515,6 @@ def test_compatible_driver_and_bindings_without_dts(query):
     assert docs == [('Documentation/devicetree/bindings/regulator/fixed-regulator.yaml', '25,54,69,70,138')]
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_compatible_board_strings_across_dts(query):
     'every quoted string of a compatible list, in every board file'
     defs, refs, docs, exists = search(query, 'nokia,n8x0', 'B')
@@ -551,20 +534,63 @@ def test_compatible_board_strings_across_dts(query):
 
 # Spot-check some files (the perl suite ran `query.py file`; it prints
 # the tokenized file, like get_tokenized_file)
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_file_nonexistent(query):
     assert query.get_tokenized_file('v5.4', '/SOME_NONEXISTENT_FILENAME_XYZZY_PLUGH') == ''
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_file_c(query):
     code = query.get_tokenized_file('v5.4', '/drivers/i2c/i2c-dev.c')
     assert 'i2c-dev.c' in code
     assert 'Vogl' in code
 
 
-@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_file_h(query):
     code = query.get_tokenized_file('v5.4', '/drivers/i2c/i2c-core.h')
     assert 'i2c-core.h' in code
     assert 'We' in code
+
+
+# Autocomplete: the old BDB DB_SET_RANGE prefix scan — up to 10 keys,
+# over the definitions keys (compatibles for family B), in UTF-8 BYTE
+# order (BDB's memcmp default comparison)
+def test_autocomplete_prefix_scan(query):
+    keys = query.autocomplete_keys('i2c_', 'C')
+    assert keys and all(k.startswith('i2c_') for k in keys)
+    assert len(keys) <= 10
+
+    # the quoted-key form: family B keys are stored URL-quoted and come
+    # back unquoted
+    keys = query.autocomplete_keys('nokia,', 'B')
+    assert keys == ['nokia,n800', 'nokia,n810', 'nokia,n8x0',
+                    'nokia,retu', 'nokia,tahvo']
+
+
+# O4: the prefix scan must order by UTF-8 bytes, not by collation — a
+# build with ICU's collation active would sort é next to e and fail
+# this (the names mix high bytes and ASCII)
+def test_autocomplete_order_is_utf8_bytewise(tmp_path):
+    from elixir import data_duckdb as dd
+    from elixir.query import Query
+
+    names = ['zz', 'Zebra', 'apple', 'é', 'eclair', 'Éclair',
+             'é0', 'e~', 'aa', 'zebra']
+    db = tmp_path / 'data.duckdb'
+    conn = dd.connect_rw(str(db))
+    try:
+        for i, name in enumerate(names):
+            conn.execute('INSERT INTO idents VALUES (?, ?, 1, 0)', [i, name])
+            conn.execute("INSERT INTO defs VALUES (?, 0, 1, 'function', 'C')", [i])
+    finally:
+        conn.close()
+
+    q = Query(str(tmp_path), '/nowhere/proj/repo')
+    try:
+        got = q.autocomplete_keys('', 'C')
+        assert got == sorted(names, key=lambda s: s.encode('utf-8'))
+
+        # a high-byte PREFIX is URL-quoted before matching (the keys are
+        # stored quoted only in family B), so it can never match a defs
+        # name — the old BDB scan behaved the same way
+        assert q.autocomplete_keys('é', 'C') == []
+    finally:
+        q.close()
