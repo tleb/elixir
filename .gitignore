@@ -18,3 +18,6 @@ http/robots.txt
 *~
 ~*
 .envrc
+
+# t/equiv captures stay outside the repo (default ../elixir-data-acceptance/equiv)
+t/equiv/captures/
