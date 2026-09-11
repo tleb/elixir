@@ -795,7 +795,14 @@ sweep_scratch()
 refs_pool = multiprocessing.get_context('fork').Pool(num_threads)
 
 db_path = os.path.join(data_dir, 'data.duckdb')
-conn = dd.connect_rw(db_path, threads=num_threads)
+# DuckDB's buffer budget for ingest. The connect_rw default (512MB)
+# suits serving; a linux tag's refs ingest alone wants gigabytes.
+# A quarter of the RAM keeps room for the parse pool beside it.
+# ELIXIR_DDB_MEM overrides for constrained machines.
+ram_gb = (os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')) >> 30
+conn = dd.connect_rw(db_path, threads=num_threads,
+                     memory_limit=os.environ.get('ELIXIR_DDB_MEM',
+                                                 '%dGB' % max(1, ram_gb // 4)))
 
 done = {row[0] for row in conn.execute('SELECT tag FROM versions').fetchall()}
 tag_buf = [tag for tag in repo.list_tags(lib.getRepoDir(), project)

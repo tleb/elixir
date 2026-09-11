@@ -98,6 +98,8 @@ Run it again at any time to index newly released versions.
 
 You can set `$ELIXIR_THREADS` if you want to change the number of threads used by
 update.py for indexing (by default the number of CPUs on your system).
+`$ELIXIR_DDB_MEM` overrides DuckDB's ingest memory budget (by default a
+quarter of the RAM, so the indexing pool keeps room beside it).
 
 `update.py` indexes the new tags one at a time, the oldest first, in one
 transaction per tag, and `utils/index` runs it after each fetch.
