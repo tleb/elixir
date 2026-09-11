@@ -133,7 +133,8 @@ def register_index(subparsers):
     group.add_argument('projects', nargs='*', metavar='project',
                        help="Project name(s), under the current root")
     group.add_argument('--all', action='store_true',
-                       help="Index every project under the current root")
+                       help="Bootstrap the known projects, then index every "
+                            "project under the current root")
     parser.set_defaults(handler=run_index)
 
 # --- remote: the explicit way to give a project extra remotes ---

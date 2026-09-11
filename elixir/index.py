@@ -26,8 +26,10 @@
 # folded pipeline — fetch then elixir.update.run() in-process, twice
 # when starting from scratch — is project_index(); run() loops it over
 # the requested projects (or every subdirectory of the root) and keeps
-# going past failures. Custom remotes go through the `remote add` CLI
-# subcommand or project_add_remote() directly.
+# going past failures. Before an --all pass, ensure_default_projects()
+# bootstraps every project of DEFAULT_REMOTES under the root — what
+# utils/index did for `index <root> --all`. Custom remotes go through
+# the `remote add` CLI subcommand or project_add_remote() directly.
 
 import os
 import re
@@ -142,13 +144,27 @@ def project_index(proj_dir):
         print('%s: indexing' % name, flush=True)
         update.run(os.path.join(proj_dir, 'repo'), data_dir)
 
+def ensure_default_projects(root):
+    '''Bootstrap every project of the DEFAULT_REMOTES table under root
+    (init + default remotes, idempotent) — what utils/index did for
+    every project when invoked as `index <root> --all`. Additive only:
+    it creates and completes, never removes; projects it does not know
+    are simply left for the indexing loop to pick up.'''
+    for name in sorted(DEFAULT_REMOTES):
+        proj_dir = os.path.join(root, name)
+        project_init(proj_dir)
+        for url in DEFAULT_REMOTES[name]:
+            project_add_remote(proj_dir, url)
+
 def run(root, names):
-    '''Index the given projects under root; names None means every
-    direct subdirectory of root, whatever it is. A project failing
-    with UpdateError or a git error is logged and skipped, the rest
-    still runs; the list of failed names is returned so the caller
-    can exit non-zero.'''
+    '''Index the given projects under root; names None means --all:
+    first bootstrap every known project of DEFAULT_REMOTES (a fresh
+    root then holds all of them), then index every direct subdirectory
+    of root, bootstrap-made or not. A project failing with UpdateError
+    or a git error is logged and skipped, the rest still runs; the
+    list of failed names is returned so the caller can exit non-zero.'''
     if names is None:
+        ensure_default_projects(root)
         names = sorted(e.name for e in os.scandir(root) if e.is_dir())
     failed = []
     for name in names:

@@ -21,6 +21,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+import os
 import subprocess
 
 import pytest
@@ -171,3 +172,55 @@ def test_default_remotes_table():
     # The multi-URL entries survived the port
     assert len(index.DEFAULT_REMOTES['dpdk']) == 2
     assert len(index.DEFAULT_REMOTES['linux']) == 3
+
+
+def remote_urls(proj_dir):
+    """The project's remotes as a {name: url} dict"""
+    out = subprocess.run(['git', '-C', str(proj_dir / 'repo'), 'remote', '-v'],
+                         check=True, capture_output=True, text=True)
+    urls = {}
+    for line in out.stdout.splitlines():
+        name, url, kind = line.split()
+        if kind == '(fetch)':
+            urls[name] = url
+    return urls
+
+
+def test_ensure_default_projects_bootstraps_table(tmp_path):
+    # The --all bootstrap step, directly: an empty root ends up with
+    # exactly the DEFAULT_REMOTES projects, each a bare repo with its
+    # default remote(s) — no fetch, no network
+    index.ensure_default_projects(tmp_path)
+
+    assert {e.name for e in os.scandir(tmp_path)} == DEFAULT_PROJECTS
+    for name, urls in index.DEFAULT_REMOTES.items():
+        proj = tmp_path / name
+        assert (proj / 'data').is_dir()
+        assert is_bare(proj)
+        assert remote_urls(proj) == {'remote%d' % i: u
+                                     for i, u in enumerate(urls)}
+
+    # Idempotent: a second pass adds nothing and renames nothing
+    index.ensure_default_projects(tmp_path)
+    assert {e.name for e in os.scandir(tmp_path)} == DEFAULT_PROJECTS
+    for name, urls in index.DEFAULT_REMOTES.items():
+        assert remote_urls(tmp_path / name) == {'remote%d' % i: u
+                                                for i, u in enumerate(urls)}
+
+
+def test_index_all_bootstraps_and_indexes_custom_projects(tmp_path, monkeypatch, capsys):
+    # --all wired through run(): the bootstrap populates the known
+    # projects, then every subdirectory of the root — including a
+    # custom project the table knows nothing about — runs the
+    # pipeline. Fetch and update are stubbed out: no network.
+    (tmp_path / 'custom').mkdir()
+    monkeypatch.setattr(index, 'project_fetch', lambda proj_dir: None)
+    monkeypatch.setattr(update, 'run', lambda repo_dir, data_dir: None)
+
+    failed = index.run(tmp_path, None)
+
+    assert failed == []
+    assert {e.name for e in os.scandir(tmp_path)} == DEFAULT_PROJECTS | {'custom'}
+    out = capsys.readouterr().out
+    for name in DEFAULT_PROJECTS | {'custom'}:
+        assert ('%s: indexing' % name) in out
