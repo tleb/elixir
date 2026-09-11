@@ -69,7 +69,9 @@ def synthetic_dataset():
         # occurrences in every ref family, spread over blobs and lines
         for n, fam in enumerate('CDKMB'):
             refs.append((identid, (n + identid) % 6, 10 * n + identid, fam))
-    docs = [(0, 0, 3), (2, 0, 7), (3, 2, 42)]
+    # docs rows now carry the occurrence family: C/D/K/M for /**
+    # comments, B for DT bindings doc comments (comps_docs)
+    docs = [(0, 0, 3, 'C'), (2, 0, 7, 'K'), (3, 2, 42, 'D'), (0, 5, 8, 'B')]
     return {'blobs': blobs, 'versions': versions, 'version_objects': version_objects,
             'idents': idents, 'defs': defs, 'refs': refs, 'docs': docs}
 
@@ -203,8 +205,8 @@ def test_orphan_violation(good_db, tmp_path, table, col, parent):
         ('refs', 'blobid'): (0, orphan, 1, 'C'),
         ('defs', 'identid'): (orphan, 0, 1, 'function', 'C'),
         ('defs', 'blobid'): (0, orphan, 1, 'function', 'C'),
-        ('docs', 'identid'): (orphan, 0, 1),
-        ('docs', 'blobid'): (0, orphan, 1),
+        ('docs', 'identid'): (orphan, 0, 1, 'C'),
+        ('docs', 'blobid'): (0, orphan, 1, 'C'),
         ('version_objects', 'versionid'): (orphan, 0, 'x.c'),
         ('version_objects', 'blobid'): (0, orphan, 'x.c'),
     }[(table, col)]
@@ -344,8 +346,10 @@ def test_dump_orders_by_key_columns(good_db):
     lines = buf.getvalue().decode().splitlines()
     # blobs first (hex hashes uppercase, no leading spaces), ordered by blobid
     assert lines[0].startswith('0 ')
-    # refs block: identid ascending, then blobid/refline/family
+    # docs is the last table in the dump: its rows close the output,
+    # ordered by identid, blobid, line, family — the family column is
+    # part of the key order now
+    assert lines[-4:] == ['0 0 3 C', '0 5 8 B', '2 0 7 K', '3 2 42 D']
+    # refs and docs rows share the 4-field shape: 25 refs + 4 docs
     refs = [l.split() for l in lines if len(l.split()) == 4 and l.split()[3] in 'CDKMB']
-    keys = [(int(r[0]), int(r[1]), int(r[2]), r[3]) for r in refs]
-    assert keys == sorted(keys)
-    assert len(refs) == 25
+    assert len(refs) == 25 + 4

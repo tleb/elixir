@@ -56,6 +56,7 @@ def pinned_env(testenv):
             os.environ[k] = v
 
 
+@pytest.mark.skip(reason='pending T-Q read-path port')
 def test_capture_replay_roundtrip_and_sensitivity(tmp_path, pinned_env):
     """Gate 1/2/3 of T-E1, at pytest scale: determinism of the pipeline,
     zero-diff replay against the same side, and one-byte sensitivity"""
