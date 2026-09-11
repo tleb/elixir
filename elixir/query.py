@@ -102,6 +102,8 @@ class Query:
         self.file_cache = {}
         self._tag_cache = {}       # tag -> versionid or None
         self._tags = None          # set of the database's tags
+        self._vo_versionid = None  # the version vo_all/vo_first hold
+        self._defs_exist = {}      # identid -> has a non-compatible def
         self._shared = False       # set by get_query: the cache owns this
 
     def close(self):
@@ -113,6 +115,22 @@ class Query:
             self._tags = {row[0] for row in
                           self.db.execute('SELECT tag FROM versions').fetchall()}
         return self._tags
+
+    def _vo_tables(self, versionid):
+        '''Materialize the version's blob→path occurrences as per-process
+        temp tables: every ident-page and api query joins them, and
+        scanning the whole version_objects table per request was the
+        api endpoint's dominant cost. Same rows the queries joined,
+        so shapes, groupings and orderings are untouched'''
+        if self._vo_versionid != versionid:
+            self.db.execute(
+                'CREATE OR REPLACE TEMP TABLE vo_all AS'
+                ' SELECT blobid, filepath FROM version_objects WHERE versionid = ?',
+                [versionid])
+            self.db.execute(
+                'CREATE OR REPLACE TEMP TABLE vo_first AS'
+                ' SELECT blobid, min(filepath) AS filepath FROM vo_all GROUP BY blobid')
+            self._vo_versionid = versionid
 
     def _versionid(self, version):
         # None when the version is not in the database (the old
@@ -373,18 +391,19 @@ class Query:
             # here and died with AttributeError — same 500, kept.
             raise AttributeError(version)
 
+        self._vo_tables(versionid)
+
         # Every path a blob occurs at lists its lines (the merge scan's
         # per-occurrence if), comma-joined like the RefList stored them
         for family, buf in (('C', symbol_c), ('D', symbol_dts)):
             rows = self.db.execute(
                 "SELECT vo.filepath,"
                 " string_agg(CAST(d.defline AS VARCHAR), ',' ORDER BY d.defline)"
-                " FROM defs d JOIN version_objects vo"
-                " ON vo.versionid = ? AND vo.blobid = d.blobid"
+                " FROM defs d JOIN vo_all vo ON vo.blobid = d.blobid"
                 " WHERE d.identid = ? AND d.deftype = 'compatible'"
                 " AND d.family = '" + family + "'"
                 " GROUP BY vo.blobid, vo.filepath ORDER BY vo.filepath",
-                [versionid, identid]).fetchall()
+                [identid]).fetchall()
             for path, lines in rows:
                 if family == 'C':
                     buf.append(SymbolInstance(path, lines, 'compatible'))
@@ -396,11 +415,10 @@ class Query:
         rows = self.db.execute(
             "SELECT vo.filepath,"
             " string_agg(CAST(dc.line AS VARCHAR), ',' ORDER BY dc.line)"
-            " FROM docs dc JOIN version_objects vo"
-            ' ON vo.versionid = ? AND vo.blobid = dc.blobid'
+            " FROM docs dc JOIN vo_all vo ON vo.blobid = dc.blobid"
             " WHERE dc.identid = ? AND dc.family = 'B'"
             ' GROUP BY vo.blobid, vo.filepath ORDER BY vo.filepath',
-            [versionid, identid]).fetchall()
+            [identid]).fetchall()
         for path, lines in rows:
             symbol_docs.append(SymbolInstance(path, lines))
 
@@ -415,17 +433,29 @@ class Query:
         # db.defs.exists: a real definition (compatibles lived in
         # db.comps; docs-only and refs-only names were never defs keys)
         row = self.db.execute(
-            'SELECT i.identid, i.macro_fams, EXISTS ('
-            '  SELECT 1 FROM defs d WHERE d.identid = i.identid'
-            "  AND d.deftype <> 'compatible')"
-            ' FROM idents i WHERE i.name = ?', [ident]).fetchone()
-        if row is None or not row[2]:
+            'SELECT identid, macro_fams FROM idents WHERE name = ?',
+            [ident]).fetchone()
+        if row is None:
             return symbol_definitions, symbol_references, symbol_doccomments, False
-        identid, macro_fams = row[0], row[1]
+        identid, macro_fams = row
+
+        # db.defs.exists, cached: the scan it replaces ran per request
+        if identid in self._defs_exist:
+            has_defs = self._defs_exist[identid]
+        else:
+            has_defs = self.db.execute(
+                "SELECT EXISTS (SELECT 1 FROM defs d WHERE d.identid = ?"
+                " AND d.deftype <> 'compatible')", [identid]).fetchone()[0]
+            if len(self._defs_exist) > 1_000_000: # bounded: an ident walk
+                self._defs_exist.clear()
+            self._defs_exist[identid] = has_defs
+        if not has_defs:
+            return symbol_definitions, symbol_references, symbol_doccomments, False
 
         versionid = self._versionid(version)
         if versionid is None:
             return symbol_definitions, symbol_references, symbol_doccomments, True
+        self._vo_tables(versionid)
 
         # Which def rows a family query shows: def_family == family, or
         # any row at all when the ident has a macro the family is
@@ -445,15 +475,12 @@ class Query:
         # the stable type-descending sort).
         rows = self.db.execute(
             'SELECT vo.filepath, d.deftype, d.defline'
-            ' FROM defs d JOIN ('
-            '   SELECT blobid, min(filepath) AS filepath FROM version_objects'
-            '   WHERE versionid = ? GROUP BY blobid'
-            ' ) vo ON vo.blobid = d.blobid'
+            ' FROM defs d JOIN vo_first vo ON vo.blobid = d.blobid'
             ' WHERE d.identid = ? AND d.deftype <> \'compatible\''
             '   AND ' + self._KNOWN_DEFTYPES +
             '   AND ' + def_cond +
             ' ORDER BY d.deftype DESC, vo.filepath, d.defline',
-            [versionid, identid] + def_params).fetchall()
+            [identid] + def_params).fetchall()
         for path, type, line in rows:
             symbol_definitions.append(SymbolInstance(path, line, type))
 
@@ -462,12 +489,11 @@ class Query:
         rows = self.db.execute(
             'SELECT vo.filepath,'
             " string_agg(CAST(r.refline AS VARCHAR), ',' ORDER BY r.refline)"
-            ' FROM refs r JOIN version_objects vo'
-            ' ON vo.versionid = ? AND vo.blobid = r.blobid'
+            ' FROM refs r JOIN vo_all vo ON vo.blobid = r.blobid'
             ' WHERE r.identid = ?'
             + ('' if ref_fams is None else ' AND ' + ref_fams)
             + ' GROUP BY vo.blobid, vo.filepath ORDER BY vo.filepath',
-            [versionid, identid]).fetchall()
+            [identid]).fetchall()
         for path, lines in rows:
             symbol_references.append(SymbolInstance(path, lines))
 
@@ -477,11 +503,10 @@ class Query:
         # only the first: the highest line of the file is the one shown.
         rows = self.db.execute(
             'SELECT vo.filepath, CAST(max(dc.line) AS VARCHAR)'
-            ' FROM docs dc JOIN version_objects vo'
-            ' ON vo.versionid = ? AND vo.blobid = dc.blobid'
+            ' FROM docs dc JOIN vo_all vo ON vo.blobid = dc.blobid'
             " WHERE dc.identid = ? AND dc.family <> 'B'"
             ' GROUP BY vo.blobid, vo.filepath ORDER BY vo.filepath',
-            [versionid, identid]).fetchall()
+            [identid]).fetchall()
         for path, line in rows:
             symbol_doccomments.append(SymbolInstance(path, line))
 

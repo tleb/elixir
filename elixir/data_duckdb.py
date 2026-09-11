@@ -60,6 +60,13 @@ import tempfile
 
 import duckdb
 
+# duckdb probes `import pandas` on every parameterized execute (it
+# supports DataFrame params); with pandas absent the probe fails
+# uncached and walks sys.path each time - measurable per execute.
+# Blocking the name makes the failure instant; an installed pandas is
+# untouched (setdefault only fills the missing case).
+sys.modules.setdefault('pandas', None)
+
 # Tables in the fixed order used by canonical_dump() and compare_multiset().
 TABLES = ('blobs', 'versions', 'version_objects', 'idents', 'defs', 'refs', 'docs')
 

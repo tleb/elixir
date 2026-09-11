@@ -26,6 +26,9 @@ ignore = [
 "t/*" = ["E402"]
 # update.py: module docstring and cross-phase helpers sit above late imports
 "update.py" = ["E402"]
+# vulture whitelist: bare names are vulture's documented whitelist
+# style - undefined on purpose, read by vulture as references
+"t/lint_vulture_whitelist.py" = ["B018", "F821"]
 # Lexer test inputs embed significant trailing whitespace and
 # whitespace-only lines: raw lexing data, not formatting
 "elixir/lexers/tests/test_c.py" = ["W291"]
