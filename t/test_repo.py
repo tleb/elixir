@@ -188,7 +188,7 @@ def test_blob_lists_round_trip_equals_list_blobs(tmp_path):
     # (greppable, one blob per line: hashes contain no space)
     with open(tmp_path / 'blobwalk-lists', 'rb') as f:
         lines = f.read().split(b'\n')[:-1]
-    assert lines and all(len(l.split(b' ', 1)) == 2 for l in lines)
+    assert lines and all(len(ln.split(b' ', 1)) == 2 for ln in lines)
 
 
 def test_dts_comp_support_table():
@@ -225,7 +225,7 @@ def test_get_blob_lines_scriptlines_semantics(monkeypatch):
         (b'a\n\nb\n', [b'a', b'', b'b']),
     ]
     for blob, expected in cases:
-        monkeypatch.setattr(repo, 'get_blob', lambda hash: blob)
+        monkeypatch.setattr(repo, 'get_blob', lambda hash, _b=blob: _b)
         assert repo.get_blob_lines(b'0' * 40) == expected, blob
 
 

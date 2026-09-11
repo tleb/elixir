@@ -21,7 +21,8 @@ import falcon
 
 from .lib import validFamily
 from .query import get_query
-from .web_utils import validate_project, validate_ident
+from .web_utils import validate_ident, validate_project
+
 
 class AutocompleteResource:
     def on_get(self, req, resp):

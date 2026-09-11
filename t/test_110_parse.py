@@ -22,8 +22,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from elixir import parse
 from elixir.lib import getFileFamily
 

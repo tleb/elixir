@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-import sys, pathlib
+import pathlib
+import sys
+
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-from elixir.query import Query
 from elixir import lib
+from elixir.query import Query
+
 
 def cmd_stats(q, **kwargs):
     db = q.db

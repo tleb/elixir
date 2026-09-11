@@ -20,22 +20,24 @@
 
 import re
 from urllib import parse
+
 from elixir.lib import decode
+
 
 class FindCompatibleDTS:
     def __init__(self):
         # Compile regexes
-        self.regex_c = re.compile("\s*{*\s*\.compatible\s*=\s*\"(.+?)\"")
-        self.regex_dts1 = re.compile("\s*compatible")
+        self.regex_c = re.compile("\\s*{*\\s*\\.compatible\\s*=\\s*\"(.+?)\"")
+        self.regex_dts1 = re.compile(r"\s*compatible")
         self.regex_dts2 = re.compile("\"(.+?)\"")
-        self.regex_bindings = re.compile("([\w-]+,?[\w-]+)")
+        self.regex_bindings = re.compile(r"([\w-]+,?[\w-]+)")
 
     def parse_c(self, content):
         return self.regex_c.findall(content)
 
     def parse_dts(self, content):
         ret = []
-        if self.regex_dts1.match(content) != None:
+        if self.regex_dts1.match(content) is not None:
             ret = self.regex_dts2.findall(content)
         return ret
 

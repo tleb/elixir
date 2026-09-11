@@ -1,5 +1,7 @@
 import re
+
 from .utils import Filter, FilterContext, filename_without_ext_matches
+
 
 # Filters for files listed in Makefiles using $(srctree)
 # $(srctree)/Makefile
@@ -16,7 +18,7 @@ class MakefileSrcTreeFilter(Filter):
             else:
                 return m.group(0)
 
-        return re.sub('(?:(?<=\s|=)|(?<=-I))(?!/)\$\(srctree\)/((?:[-\w/]+/)?[-\w\.]+)(\s+|\)|$)',
+        return re.sub(r'(?:(?<=\s|=)|(?<=-I))(?!/)\$\(srctree\)/((?:[-\w/]+/)?[-\w\.]+)(\s+|\)|$)',
                       keep_makefilesrctree, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:

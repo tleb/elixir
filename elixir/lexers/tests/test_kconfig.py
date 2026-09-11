@@ -1,6 +1,7 @@
 from ..lexers import KconfigLexer
 from .base import LexerTest
 
+
 class KconfigLexerTest(LexerTest):
     lexer_cls = KconfigLexer
     default_filtered_tokens = ("SPECIAL", "COMMENT", "STRING", "IDENTIFIER", "SPECIAL", "ERROR")

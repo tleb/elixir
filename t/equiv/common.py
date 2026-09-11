@@ -42,7 +42,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, REPO_ROOT)
@@ -81,6 +80,7 @@ def make_client(proj_dir):
     through this identical client, so client quirks cancel."""
     pin_env(proj_dir)
     from falcon import testing
+
     from elixir.web import get_application
     return testing.TestClient(get_application())
 
@@ -180,8 +180,7 @@ class _CliZstdReader:
             raise RuntimeError(f'zstd exited {rc}')
 
     def __iter__(self):
-        for line in self.p.stdout:
-            yield line
+        yield from self.p.stdout
         self.close()
 
 
@@ -213,8 +212,7 @@ class _ModuleZstdReader:
         self.f.close()
 
     def __iter__(self):
-        for line in self.c:
-            yield line
+        yield from self.c
         self.close()
 
 
@@ -267,6 +265,7 @@ def iter_records(outdir):
 
 def versions_info():
     import platform
+
     import duckdb
     import falcon
     import jinja2

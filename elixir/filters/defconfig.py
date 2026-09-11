@@ -1,5 +1,7 @@
 import re
+
 from .utils import Filter, FilterContext
+
 
 # Filter for kconfig identifier in defconfigs
 # Replaces defconfig identifiers with links to definitions/references
@@ -14,7 +16,7 @@ class DefConfigIdentsFilter(Filter):
         def keep_defconfigidents(m):
             return '__KEEPDEFCONFIGIDENTS__' + self.keep(m.group(1))
 
-        return re.sub('(CONFIG_[\w]+)', keep_defconfigidents, code, flags=re.MULTILINE)
+        return re.sub(r'(CONFIG_[\w]+)', keep_defconfigidents, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_defconfigidents(m):

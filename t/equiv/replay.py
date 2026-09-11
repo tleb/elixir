@@ -81,7 +81,7 @@ def describe_diff(entry, expected, got):
             et, gt = eb.decode('utf-8'), gb.decode('utf-8')
             diff = list(difflib.unified_diff(
                 et.splitlines(), gt.splitlines(),
-                fromfile=f'expected i={entry["i"]}', tofile=f'got',
+                fromfile=f'expected i={entry["i"]}', tofile='got',
                 lineterm='', n=1))
             d['body_diff'] = '\n'.join(diff[:60])
             if len(diff) > 60:
@@ -137,7 +137,7 @@ def _fetch_all(entries_by_id, proj_dir, part_root, workers):
     records = {}
     for n, chunk in enumerate(chunks):
         part = _as_compressed(f'{part_root}.part{n}')
-        for e, rec in zip(chunk, common.iter_records_file(part)):
+        for e, rec in zip(chunk, common.iter_records_file(part), strict=True):
             records[e['i']] = rec
         os.remove(part)
     return records

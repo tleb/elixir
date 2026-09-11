@@ -1,8 +1,10 @@
-import re
 import os
+import re
 from dataclasses import dataclass
 from typing import Callable, List
+
 from ..query import Query
+
 
 # Context data used by Filters
 # tag: browsed version, unquoted
@@ -29,8 +31,8 @@ class FilterContext:
 # The second part runs on HTML, replacing markings left by the first part with HTML code.
 # path_exceptions: list of regexes, disables filter if path of the filtered file matches a regex from the list
 class Filter:
-    def __init__(self, path_exceptions: List[str] = []):
-        self.path_exceptions = path_exceptions
+    def __init__(self, path_exceptions: List[str] = None):
+        self.path_exceptions = path_exceptions if path_exceptions is not None else []
         self.keeps = [] # texts stashed by transform_raw_code, restored by untransform_formatted_code
 
     # Stash text and return its encoded index

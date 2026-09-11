@@ -36,17 +36,17 @@
 # - the API/web line fields of refs and compatibles are the BDB RefList
 #   comma-joined line strings; defs lines are ints (per the templates).
 
-from .lib import decode, tokenizeFile
-from . import lib
-from . import repo
-from . import data_duckdb as dd
 import os
 from collections import OrderedDict
+from io import BytesIO
 from urllib import parse
 
-from io import BytesIO
+from . import data_duckdb as dd
+from . import lib, repo
+from .lib import decode, tokenizeFile
 
-class SymbolInstance(object):
+
+class SymbolInstance:
     def __init__(self, path, line, type=None):
         self.path = path
         self.line = line
@@ -110,8 +110,8 @@ class Query:
 
     def _tags_in_db(self):
         if self._tags is None:
-            self._tags = set(row[0] for row in
-                             self.db.execute('SELECT tag FROM versions').fetchall())
+            self._tags = {row[0] for row in
+                          self.db.execute('SELECT tag FROM versions').fetchall()}
         return self._tags
 
     def _versionid(self, version):
@@ -189,7 +189,7 @@ class Query:
             + self._DEFS_CACHE_SQL[family]
             + " AND i.name IN (SELECT unnest(string_split(?, chr(1))))",
             ['\x01'.join(sorted(words))]).fetchall()
-        return set(row[0] for row in rows)
+        return {row[0] for row in rows}
 
     # Returns the contents of the specified file
     # Tokens are marked for further processing
@@ -198,7 +198,7 @@ class Query:
         filename = os.path.basename(path)
         family = lib.getFileFamily(filename)
 
-        if family != None:
+        if family is not None:
             assert family in dd.FAM_BITS, f"family {family} must have its definitions cached"
 
             tokens = list(tokenizeFile(self.repo_dir, self.project,
@@ -208,8 +208,8 @@ class Query:
                 prefix = b'CONFIG_'
             # Words are the odd positions of the separator/word pairs;
             # the unique set is what the mark query needs
-            words = set(decode(prefix + tok)
-                        for i, tok in enumerate(tokens) if i % 2 == 1)
+            words = {decode(prefix + tok)
+                     for i, tok in enumerate(tokens) if i % 2 == 1}
             marks = self._marks_for(family, words)
 
             buffer = BytesIO()

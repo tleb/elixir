@@ -18,27 +18,36 @@
 #  You should have received a copy of the GNU Affero General Public License
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
+import datetime
 import logging
 import os
 import threading
 import time
-import datetime
 from collections import OrderedDict, namedtuple
 from re import search, sub
 from typing import Any, Callable, Tuple
 from urllib import parse
+
 import falcon
 import jinja2
 
-from .lib import CURRENT_DIR, validFamily, getFileFamily
-from .query import Query, SymbolInstance
+from .api import ApiIdentGetterResource
+from .autocomplete import AutocompleteResource
 from .filters import get_filters
 from .filters.utils import FilterContext
-from .autocomplete import AutocompleteResource
-from .api import ApiIdentGetterResource
-from .query import get_query
-from .web_utils import ProjectConverter, IdentConverter, validate_version, validate_project, validate_ident, \
-        get_elixir_version_string, get_elixir_repo_url, RequestContext, Config
+from .lib import CURRENT_DIR, getFileFamily, validFamily
+from .query import Query, SymbolInstance, get_query
+from .web_utils import (
+    Config,
+    IdentConverter,
+    ProjectConverter,
+    RequestContext,
+    get_elixir_repo_url,
+    get_elixir_version_string,
+    validate_ident,
+    validate_project,
+    validate_version,
+)
 
 VERSION_CACHE_DURATION_SECONDS = 2 * 60  # 2 minutes
 ELIXIR_VERSION_STRING = get_elixir_version_string()
@@ -50,11 +59,12 @@ DEFAULT_PROJECT = 'linux'
 # to be used in project/version URLs
 class ElixirProjectError(falcon.errors.HTTPError):
     def __init__(self, title, description, project=None, version=None, query=None,
-                 status=falcon.HTTP_BAD_REQUEST, extra_template_args={}, **kwargs):
+                 status=falcon.HTTP_BAD_REQUEST, extra_template_args=None,
+                 **kwargs):
         self.project = project
         self.version = version
         self.query = query
-        self.extra_template_args = extra_template_args
+        self.extra_template_args = extra_template_args or {}
         super().__init__(status, title=title, description=description, **kwargs)
 
 # Generate a summary of error details for a bug report
@@ -469,8 +479,8 @@ def generate_raw_source(resp, query, project, version, path):
 # Guesses file format based on filename, returns code formatted as HTML
 def format_code(filename: str, code: str) -> str:
     import pygments
-    import pygments.lexers
     import pygments.formatters
+    import pygments.lexers
     from pygments.lexers.asm import GasLexer
     from pygments.lexers.r import SLexer
 
@@ -554,8 +564,8 @@ def get_directory_entries(q: Query, base_url, tag: str, path: str) -> list[Direc
     dir_entries = []
     lines = q.get_dir_contents(tag, path)
 
-    for l in lines:
-        type, name, size, perm = l.split(' ')
+    for ln in lines:
+        type, name, size, perm = ln.split(' ')
         file_path = f"{ path }/{ name }"
 
         if type == 'tree':
@@ -657,8 +667,8 @@ def symbol_instance_to_entry(base_url: str, symbol: SymbolInstance) -> SymbolEnt
         line_numbers = [symbol.line]
 
     lines = [
-        LineWithURL(l, f'{ base_url }/{ symbol.path }#L{ l }')
-        for l in line_numbers
+        LineWithURL(ln, f'{ base_url }/{ symbol.path }#L{ ln }')
+        for ln in line_numbers
     ]
 
     return SymbolEntry(symbol.type, symbol.path, lines)

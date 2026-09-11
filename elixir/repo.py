@@ -652,7 +652,7 @@ class BlobLists:
         '''Append one tag's (hash, filename, path) triples; the
         filename is dropped here and recomputed by get()'''
         start = self.f.tell()
-        for hash, filename, path in blobs:
+        for hash, _, path in blobs:
             self.f.write(hash + b' ' + path + b'\n')
         self.slices[tag] = (start, self.f.tell() - start)
 
@@ -725,6 +725,10 @@ def _rev_path(project, version, path):
     from the display version through version_rev'''
     return version_rev(_b(version), project) + b':' + denormalize(_b(path))
 
+def _field(fields, i):
+    '''awk's default field splitting: missing fields read as empty'''
+    return fields[i] if i < len(fields) else b''
+
 def _git_or_empty(repo_dir, *args):
     '''git's stdout, or b'' when git fails (script.sh's 2>/dev/null)'''
     p = subprocess.run(('git',) + args, cwd=repo_dir, stdout=subprocess.PIPE,
@@ -760,8 +764,8 @@ def get_dir(repo_dir, project, version, path):
     lines = []
     for line in out.split(b'\n')[:-1]:
         fields = line.split() # awk's default field splitting
-        pick = lambda i: fields[i] if i < len(fields) else b''
-        lines.append(b' '.join((pick(1), pick(4), pick(3), pick(0))))
+        lines.append(b' '.join((_field(fields, 1), _field(fields, 4),
+                                _field(fields, 3), _field(fields, 0))))
     lines = [line for line in lines if b' .' not in line]
 
     def compare(a, b):

@@ -1,8 +1,18 @@
 import re
 
 from . import shared
-from .utils import TokenType, simple_lexer, FirstInLine, split_by_groups, regex_concat, token_from_string, token_from_match, \
-        regex_or, match_token, Token
+from .utils import (
+    FirstInLine,
+    Token,
+    TokenType,
+    match_token,
+    regex_concat,
+    regex_or,
+    simple_lexer,
+    split_by_groups,
+    token_from_match,
+    token_from_string,
+)
 
 # Lexers used to extract possible references from source files
 # Design inspired by Pygments lexers interface
@@ -65,7 +75,7 @@ class DTSLexer:
     dts_property_assignment = f'({ dts_property_name })' + r'(\s*)(=)'
     dts_property_empty = f'({ dts_property_name })' + r'(\s*)(;)'
 
-    dts_directive = r'/[a-zA-Z0-9-]+/';
+    dts_directive = r'/[a-zA-Z0-9-]+/'
     dts_delete_node = regex_concat(r'/delete-node/\s+', dts_node_name)
     dts_delete_property = regex_concat(r'/delete-property/\s+', dts_property_name)
 
@@ -161,7 +171,7 @@ class KconfigLexer:
     # other perhaps interesting identifiers
     kconfig_minor_identifier = r'[a-zA-Z0-9_/][a-zA-Z0-9_/.-]*'
     kconfig_punctuation = r'[|&!=$()/_.+<>,-]'
-    kconfig_number = f'[0-9]+' # TODO does not handle hex numbers
+    kconfig_number = '[0-9]+' # TODO does not handle hex numbers
 
     # NOTE no identifiers are parsed out of KConfig help texts now, this changes the
     # old behavior

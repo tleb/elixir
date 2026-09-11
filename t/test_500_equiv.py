@@ -6,8 +6,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from t.equiv import common, normalize
 from t.equiv import capture as capture_mod
+from t.equiv import common, normalize
 from t.equiv import replay as replay_mod
 
 

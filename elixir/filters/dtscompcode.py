@@ -1,5 +1,7 @@
 import re
+
 from .utils import Filter, FilterContext, extension_matches
+
 
 # Filter for DT compatible strings in code (C family) files
 # Finds assigments to properties and variables named 'compatible' and recognized by
@@ -15,14 +17,14 @@ class DtsCompCodeFilter(Filter):
     def transform_raw_code(self, ctx, code: str) -> str:
         # quit early if source file does not contain any strings that could be an assignment to a 'compatible' property
         # this is much faster than the match-and-replace regex, especially for big files
-        compatible_search = re.search('\.(\033\[31m)?compatible(\033\[0m)?\s*=', code, flags=re.MULTILINE)
+        compatible_search = re.search('\\.(\033\\[31m)?compatible(\033\\[0m)?\\s*=', code, flags=re.MULTILINE)
         if compatible_search is None:
             return code
 
         def keep_dtscompC(m):
             return f'{ m.group(1) }"__KEEPDTSCOMPC__{ self.keep(m.group(4)) }"'
 
-        return re.sub('(\s*{*\s*\.(\033\[31m)?compatible(\033\[0m)?\s*=\s*)\"(.+?)\"',
+        return re.sub('(\\s*{*\\s*\\.(\033\\[31m)?compatible(\033\\[0m)?\\s*=\\s*)\"(.+?)\"',
                       keep_dtscompC, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:

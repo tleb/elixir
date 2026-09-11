@@ -1,6 +1,7 @@
 from ..lexers import GasLexer
 from .base import LexerTest
 
+
 class GasLexerTest(LexerTest):
     lexer_cls = GasLexer
     default_filtered_tokens = ("SPECIAL", "COMMENT", "STRING", "IDENTIFIER", "SPECIAL", "ERROR")

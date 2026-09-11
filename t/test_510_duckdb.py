@@ -380,5 +380,5 @@ def test_dump_orders_by_key_columns(good_db):
     # part of the key order now
     assert lines[-4:] == ['0 0 3 C', '0 5 8 B', '2 0 7 K', '3 2 42 D']
     # refs and docs rows share the 4-field shape: 25 refs + 4 docs
-    refs = [l.split() for l in lines if len(l.split()) == 4 and l.split()[3] in 'CDKMB']
+    refs = [ln.split() for ln in lines if len(ln.split()) == 4 and ln.split()[3] in 'CDKMB']
     assert len(refs) == 25 + 4

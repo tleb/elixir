@@ -18,17 +18,18 @@
 #  You should have received a copy of the GNU Affero General Public License
 #  along with Elixir.  If not, see <http://www.gnu.org/licenses/>.
 
-import sys
-import re
 import logging
-import subprocess, os
+import os
+import re
+import subprocess
+import sys
 
 logger = logging.getLogger(__name__)
 
 CURRENT_DIR = os.path.abspath(os.path.dirname(os.path.abspath(__file__)) + '/../')
 
 def run_cmd(*args, env=None):
-    p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    p = subprocess.run(args, capture_output=True, env=env)
     if len(p.stderr) != 0:
         logger.error('command %s printed to stderr: \n%s', str(args), p.stderr.decode('utf-8'))
     return p.stdout, p.returncode
@@ -50,7 +51,7 @@ def tokenize(data, family):
 def tokenizeFile(repo_dir, project, ver, file, family):
     '''Tokens of the file <ver>:<file> of the repository, alternating
     separators and words (what script.sh get-file fed the tokenizer)'''
-    from . import repo # deferred: repo imports this module
+    from . import repo  # deferred: repo imports this module
     data = repo.get_file(repo_dir, project, ver, file).replace(b'\n', b'\001')
     yield from tokenize(data, family)
 
@@ -174,14 +175,6 @@ blacklist = (
     b'x'
 )
 
-def isIdent(bstr):
-    if (len(bstr) < 2 or
-        bstr in blacklist or
-        bstr.startswith(b'~')):
-        return False
-    else:
-        return True
-
 def getDataDir():
     try:
         return os.environ['LXR_DATA_DIR']
@@ -222,24 +215,4 @@ def getFileFamily(filename):
     else :
         return None
 
-# 1 char values are file families
-# 2 chars values with a M are macros families
-compatibility_list = {
-    'C' : ['C', 'K'],
-    'K' : ['K'],
-    'D' : ['D', 'CM'],
-    'M' : ['K']
-}
 
-# Check if families are compatible
-# First argument can be a list of different families
-# Second argument is the key for choosing the right array in the compatibility list
-def compatibleFamily(file_family, requested_family):
-    return any(item in file_family for item in compatibility_list[requested_family])
-
-# Check if a macro is compatible with the requested family
-# First argument can be a list of different families
-# Second argument is the key for choosing the right array in the compatibility list
-def compatibleMacro(macro_family, requested_family):
-    return any(item + 'M' in compatibility_list[requested_family]
-               for item in macro_family)

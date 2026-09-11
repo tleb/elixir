@@ -83,13 +83,12 @@ def scan_references(path, project, raw):
     except UnicodeDecodeError:
         code = raw.decode('raw_unicode_escape')
     idents, errors, tokens = scanner(code, MAX_SAMPLES)
-    return family, idents, errors, [(t, path, l) for t, l in tokens]
+    return family, idents, errors, [(t, path, ln) for t, ln in tokens]
 
 
 def assert_equivalent(path, project, raw):
     expect = lex_references(path, project, raw)
     got = scan_references(path, project, raw)
-    __tracebackhint__ = True
     assert got == expect, _diff(expect, got, path)
 
 

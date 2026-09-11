@@ -1,5 +1,6 @@
 import re
 from typing import List
+
 from .utils import Filter, FilterContext, extension_matches
 
 # Filters for cpp includes like these:
@@ -12,8 +13,8 @@ from .utils import Filter, FilterContext, extension_matches
 # prefix_path: a list of paths, will be used to replace the prefix path during the
 # untransform_formatted_code step
 class CppPathIncFilter(Filter):
-    def __init__(self, prefix_path: List[str] = ["include"], *args, **kwargs):
-        self.prefix_path = prefix_path
+    def __init__(self, prefix_path: List[str] = None, *args, **kwargs):
+        self.prefix_path = prefix_path if prefix_path is not None else ["include"]
         super().__init__(*args, **kwargs)
 
     def check_if_applies(self, ctx) -> bool:
@@ -32,7 +33,7 @@ class CppPathIncFilter(Filter):
             else:
                 return f'{ m1 }#include{ m2 }<__KEEPCPPPATHINC__{ self.keep(inc) }>'
 
-        return re.sub('^(\s*)#include(\s*)<(.*?)>', keep_cpppathinc, code, flags=re.MULTILINE)
+        return re.sub(r'^(\s*)#include(\s*)<(.*?)>', keep_cpppathinc, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_cpppathinc(m):

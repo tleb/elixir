@@ -312,6 +312,6 @@ def get_scanner(path, project_name):
     lexer the tables map a file to is the lexer the scanner must
     match.'''
     resolved = get_lexer_class(path, project_name)
-    if type(resolved) == tuple:
+    if type(resolved) is tuple:
         resolved = resolved[0]
     return _scanners.get(resolved)

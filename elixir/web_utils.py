@@ -1,9 +1,10 @@
+import logging
 import os
 import re
-import logging
 import threading
-from urllib import parse
 from typing import Dict, NamedTuple
+from urllib import parse
+
 import falcon
 import jinja2
 

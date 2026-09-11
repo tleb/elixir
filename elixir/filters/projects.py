@@ -1,26 +1,20 @@
-from .ident import IdentFilter
-
+from .configin import ConfigInFilter
 from .cppinc import CppIncFilter
 from .cpppathinc import CppPathIncFilter
-
 from .defconfig import DefConfigIdentsFilter
-from .configin import ConfigInFilter
-
+from .dtscompcode import DtsCompCodeFilter
+from .dtscompdocs import DtsCompDocsFilter
+from .dtscompdts import DtsCompDtsFilter
+from .dtsi import DtsiFilter
+from .ident import IdentFilter
 from .kconfig import KconfigFilter
 from .kconfigidents import KconfigIdentsFilter
-
-from .dtsi import DtsiFilter
-from .dtscompdocs import DtsCompDocsFilter
-from .dtscompcode import DtsCompCodeFilter
-from .dtscompdts import DtsCompDtsFilter
-
-from .makefileo import MakefileOFilter
-from .makefiledtb import MakefileDtbFilter
 from .makefiledir import MakefileDirFilter
-from .makefilesubdir import MakefileSubdirFilter
+from .makefiledtb import MakefileDtbFilter
 from .makefilefile import MakefileFileFilter
+from .makefileo import MakefileOFilter
 from .makefilesrctree import MakefileSrcTreeFilter
-
+from .makefilesubdir import MakefileSubdirFilter
 
 # List of filters applied to all projects
 default_filters = [

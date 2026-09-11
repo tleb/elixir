@@ -1,5 +1,7 @@
 import re
+
 from .utils import Filter, FilterContext, filename_without_ext_matches
+
 
 # Filters for Config.in includes
 # source "path/file"
@@ -13,7 +15,7 @@ class ConfigInFilter(Filter):
         def keep_configin(m):
             return f'{ m.group(1) }{ m.group(2) }{ m.group(3) }"__KEEPCONFIGIN__{ self.keep(m.group(4)) }"'
 
-        return re.sub('^(\s*)(source)(\s*)\"(.*)\"', keep_configin, code, flags=re.MULTILINE)
+        return re.sub('^(\\s*)(source)(\\s*)\"(.*)\"', keep_configin, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_configin(m):

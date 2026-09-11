@@ -1,4 +1,4 @@
-from .utils import regex_or, regex_concat
+from .utils import regex_concat, regex_or
 
 # Regexes shared between lexers
 

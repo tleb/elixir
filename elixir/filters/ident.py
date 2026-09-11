@@ -1,5 +1,7 @@
 import re
+
 from .utils import Filter, FilterContext
+
 
 # Filter for identifier links
 # Replaces identifiers marked by Query.get_tokenized_file() with links to ident page.
@@ -13,7 +15,7 @@ class IdentFilter(Filter):
         def sub_func(m):
             return '__KEEPIDENTS__' + self.keep(m.group(1))
 
-        return re.sub('\033\[31m(?!CONFIG_)(.*?)\033\[0m', sub_func, code, flags=re.MULTILINE)
+        return re.sub('\033\\[31m(?!CONFIG_)(.*?)\033\\[0m', sub_func, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def sub_func(m):

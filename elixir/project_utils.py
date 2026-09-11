@@ -4,7 +4,7 @@ from collections import OrderedDict
 
 from . import lib
 from .lexers import default_lexers
-from .lexers.lexers import CLexer, MakefileLexer, DTSLexer, GasLexer, KconfigLexer
+from .lexers.lexers import CLexer, DTSLexer, GasLexer, KconfigLexer, MakefileLexer
 
 # Per-project lexer configuration, keyed by project name.
 # Projects not present in this dictionary only use default_lexers.
@@ -90,7 +90,7 @@ def get_lexer(path: str, project_name: str):
     lexer = get_lexer_class(path, project_name)
     if lexer is None:
         return None
-    if type(lexer) == tuple:
+    if type(lexer) is tuple:
         lexer_cls, kwargs = lexer
         return lambda code: lexer_cls(code, **kwargs)
     return lambda code: lexer(code)

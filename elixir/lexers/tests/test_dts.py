@@ -1,6 +1,7 @@
 from ..lexers import DTSLexer
 from .base import LexerTest
 
+
 class DTSLexerTests(LexerTest):
     lexer_cls = DTSLexer
     default_filtered_tokens = ("SPECIAL", "COMMENT", "STRING", "IDENTIFIER", "SPECIAL", "ERROR")

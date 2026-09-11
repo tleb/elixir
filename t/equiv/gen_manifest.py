@@ -303,7 +303,6 @@ def route_coverage(M, project, tags, files_by_family, ident_hot, comp_keys):
     """R1-R9 + E* + the pinned quirks. files_by_family: family -> [paths];
     ident_hot: one known ident (str); comp_keys: a few stored comps keys"""
     v_first, v_last = tags[0], tags[-1]
-    some_file = (files_by_family.get('C') or files_by_family['none'])[0]
     some_dir = sorted({os.path.dirname('/' + f) for f in files_by_family['C']})[1]
 
     # R1 index (500 when the default 'linux' project is absent)

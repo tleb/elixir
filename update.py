@@ -95,12 +95,11 @@ from datetime import datetime
 import pyarrow as pa
 import pyarrow.dataset as pads
 
-from elixir.lexers import TokenType
-from elixir.lexers.fastscan import get_scanner
-from elixir import repo
-from elixir import parse
 import elixir.lib as lib
 from elixir import data_duckdb as dd
+from elixir import parse, repo
+from elixir.lexers import TokenType
+from elixir.lexers.fastscan import get_scanner
 from elixir.project_utils import get_lexer
 from find_compatible_dts import FindCompatibleDTS
 
@@ -229,7 +228,7 @@ class PhaseTimer:
         self.totals = run_phase_s if totals is None else totals
     def __enter__(self):
         self.start = time.monotonic()
-    def __exit__(self, *exc):
+    def __exit__(self, *_):
         seconds = time.monotonic() - self.start
         self.times[self.name] = self.times.get(self.name, 0.0) + seconds
         self.totals[self.name] += seconds
@@ -379,7 +378,7 @@ def update_versions(tag, blobs, occ_blobids):
     conn.register('tag_vo_in', table)
     conn.execute('INSERT INTO version_objects_stage SELECT * FROM tag_vo_in')
 
-    for (hash, filename, path), blobid in zip(blobs, occ_blobids):
+    for (_h, _f, path), blobid in zip(blobs, occ_blobids, strict=True):
         file_paths[blobid] = path
         # Store DT bindings documentation files to parse them later
         if path[:33] == b'Documentation/devicetree/bindings':
@@ -403,7 +402,8 @@ def update_definitions(item):
     items = []
     for idx, filename, hash in triples:
         family = lib.getFileFamily(filename)
-        if family in [None, 'M']: continue
+        if family in [None, 'M']:
+            continue
 
         metas.append((idx, family))
         items.append((repo.get_blob(hash), filename, family))
@@ -412,9 +412,9 @@ def update_definitions(item):
 
     rows = []
     seq = chunk_no << 32
-    for (idx, family), lines in zip(metas, lines_by_blob):
-        for l in lines:
-            ident, type, line = l.split(b' ')
+    for (idx, family), lines in zip(metas, lines_by_blob, strict=True):
+        for ln in lines:
+            ident, type, line = ln.split(b' ')
             type = type.decode()
             rows.append((seq, lib.decode(ident), idx, int(line.decode()),
                          defTypeR.get(type, type), family))
@@ -438,7 +438,8 @@ def _docs_chunk(item):
     blobs = []
     for idx, filename, hash in triples:
         family = lib.getFileFamily(filename)
-        if family in [None, 'M']: continue
+        if family in [None, 'M']:
+            continue
 
         metas.append((idx, family))
         blobs.append(repo.get_blob(hash))
@@ -448,9 +449,9 @@ def _docs_chunk(item):
 
     rows = []
     seq = chunk_no << 32
-    for (idx, family), out in zip(metas, lines):
-        for l in out:
-            ident, line = l.split(b' ')
+    for (idx, family), out in zip(metas, lines, strict=True):
+        for ln in out:
+            ident, line = ln.split(b' ')
             rows.append((seq, lib.decode(ident), idx, int(line.decode()), family))
             seq += 1
 
@@ -472,10 +473,11 @@ def update_compatibles(item):
     seq = chunk_no << 32
     for idx, filename, hash in triples:
         family = lib.getFileFamily(filename)
-        if family in [None, 'K', 'M']: continue
+        if family in [None, 'K', 'M']:
+            continue
 
-        for l in compatibles_parser.run(repo.get_blob_lines(hash), family):
-            ident, line = l.split(' ')
+        for ln in compatibles_parser.run(repo.get_blob_lines(hash), family):
+            ident, line = ln.split(' ')
             rows.append((seq, ident, idx, int(line), family))
             seq += 1
 
@@ -513,7 +515,8 @@ def _refs_lex_chunk(item):
         # getFileFamily expects a basename; the name-based families
         # (kconfig*, makefile*) must match in subdirectories too
         family = lib.getFileFamily(os.path.basename(filename))
-        if family == None: continue
+        if family is None:
+            continue
 
         scanner = get_scanner(filename, project)
         if scanner is None:
@@ -583,8 +586,8 @@ def update_compatibles_bindings(item):
     seq = chunk_no << 32
     for idx, _, hash in triples:
         family = 'B'
-        for l in compatibles_parser.run(repo.get_blob_lines(hash), family):
-            ident, line = l.split(' ')
+        for ln in compatibles_parser.run(repo.get_blob_lines(hash), family):
+            ident, line = ln.split(' ')
             rows.append((seq, ident, idx, int(line), family))
             seq += 1
 
@@ -794,7 +797,7 @@ refs_pool = multiprocessing.get_context('fork').Pool(num_threads)
 db_path = os.path.join(data_dir, 'data.duckdb')
 conn = dd.connect_rw(db_path, threads=num_threads)
 
-done = set(row[0] for row in conn.execute('SELECT tag FROM versions').fetchall())
+done = {row[0] for row in conn.execute('SELECT tag FROM versions').fetchall()}
 tag_buf = [tag for tag in repo.list_tags(lib.getRepoDir(), project)
            if lib.decode(tag) not in done]
 
@@ -922,7 +925,8 @@ def index_tag(tag, tag_no):
                     os.remove(path)
                 del pending[:]
                 pending_bytes = 0
-            for item, result in zip(items, refs_pool.imap(fn, items)):
+            for item, result in zip(items, refs_pool.imap(fn, items),
+                                    strict=True):
                 pending.append(unpack(result))
                 pending_bytes += os.path.getsize(pending[-1])
                 done_blobs += len(item[3])

@@ -1,6 +1,8 @@
-from os.path import dirname
 import re
+from os.path import dirname
+
 from .utils import Filter, FilterContext, filename_without_ext_matches
+
 
 # Filters for Makefile file includes like these:
 # file.o
@@ -14,7 +16,7 @@ class MakefileOFilter(Filter):
         def keep_makefileo(m):
             return f'__KEEPMAKEFILEO__{ self.keep(m.group(1)) }.o'
 
-        return re.sub('(?<=\s)([-\w/]+)\.o(?!\w)(?! :?=)', keep_makefileo, code, flags=re.MULTILINE)
+        return re.sub(r'(?<=\s)([-\w/]+)\.o(?!\w)(?! :?=)', keep_makefileo, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_makefileo(m):
@@ -27,5 +29,5 @@ class MakefileOFilter(Filter):
             npath = f'{ filedir }{ w }.c'
             return f'<a href="{ ctx.get_absolute_source_url(npath) }">{ w }.o</a>'
 
-        return re.sub('__KEEPMAKEFILEO__([A-J]+)\.o', replace_makefileo, html, flags=re.MULTILINE)
+        return re.sub(r'__KEEPMAKEFILEO__([A-J]+)\.o', replace_makefileo, html, flags=re.MULTILINE)
 

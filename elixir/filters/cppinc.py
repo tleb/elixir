@@ -1,5 +1,7 @@
 import re
+
 from .utils import Filter, FilterContext, extension_matches
+
 
 # Filters for cpp includes like these:
 # #include "file"
@@ -14,7 +16,7 @@ class CppIncFilter(Filter):
         def keep_cppinc(m):
             return f'{ m.group(1) }#include{ m.group(2) }"__KEEPCPPINC__{ self.keep(m.group(3)) }"'
 
-        return re.sub('^(\s*)#include(\s*)\"(.*?)\"', keep_cppinc, code, flags=re.MULTILINE)
+        return re.sub('^(\\s*)#include(\\s*)\"(.*?)\"', keep_cppinc, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_cppinc(m):

@@ -1,6 +1,7 @@
-import re
 import enum
+import re
 from collections import namedtuple
+
 
 # Supported token types
 class TokenType(enum.Enum):
@@ -28,7 +29,7 @@ def match_token(ctx, pattern, token_type):
     else:
         span = match.span()
         result = Token(token_type, ctx.code[span[0]:span[1]], span, ctx.line)
-        ctx.pos = span[1] 
+        ctx.pos = span[1]
         ctx.line += result.token.count('\n')
         return result, ctx
 

@@ -255,6 +255,20 @@ running at 3.1 GHz.
 If you wish to contribute to Elixir's Python code, please
 follow the https://www.python.org/dev/peps/pep-0008/[official coding style for Python].
 
+Linting is enforced with
+https://docs.astral.sh/ruff/[ruff] (configuration in `pyproject.toml`;
+style plus real-hazard rules, and unused imports/variables) and
+https://github.com/jendrikseipp/vulture[vulture] (uncalled functions
+and methods — `t/lint_vulture_whitelist.py` covers framework hooks).
+Both must pass clean:
+
+----
+python3 -m pip install -r requirements-dev.txt
+ruff check elixir update.py find_compatible_dts.py wsgi.py t utils
+vulture elixir update.py find_compatible_dts.py wsgi.py t utils \
+    t/lint_vulture_whitelist.py
+----
+
 == How to send patches
 
 The best way to share your contributions with us is to https://github.com/bootlin/elixir/pulls[file a pull

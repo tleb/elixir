@@ -1,5 +1,7 @@
 import re
+
 from .utils import Filter, FilterContext, extension_matches
+
 
 # Filter for DT compatible strings in DTS (D family) files
 # compatible = "device"
@@ -20,7 +22,7 @@ class DtsCompDtsFilter(Filter):
 
             return match
 
-        return re.sub('\s*compatible(.*?)$', sub_func, code, flags=re.MULTILINE)
+        return re.sub(r'\s*compatible(.*?)$', sub_func, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_dtscompD(m):

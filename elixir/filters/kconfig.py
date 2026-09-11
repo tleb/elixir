@@ -1,5 +1,7 @@
 import re
+
 from .utils import Filter, FilterContext, filename_without_ext_matches
+
 
 # Filters for Kconfig includes
 # Replaces KConfig includes (source keyword) with links to included files
@@ -14,7 +16,7 @@ class KconfigFilter(Filter):
         def keep_kconfig(m):
             return f'{ m.group(1) }{ m.group(2) }{ m.group(3) }"__KEEPKCONFIG__{ self.keep(m.group(4)) }"'
 
-        return re.sub('^(\s*)(source)(\s*)\"([\w/_\.-]+)\"', keep_kconfig, code, flags=re.MULTILINE)
+        return re.sub('^(\\s*)(source)(\\s*)\"([\\w/_\\.-]+)\"', keep_kconfig, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_kconfig(m):

@@ -1,6 +1,8 @@
 import re
 from urllib.parse import quote
+
 from .utils import Filter, FilterContext
+
 
 # Filter for DT compatible strings in documentation (B family) files
 # syscon
@@ -21,7 +23,7 @@ class DtsCompDocsFilter(Filter):
             else:
                 return m.group(0)
 
-        return re.sub('([\w-]+,?[\w-]+)', keep_dtscompB, code, flags=re.MULTILINE)
+        return re.sub(r'([\w-]+,?[\w-]+)', keep_dtscompB, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_dtscompB(m):

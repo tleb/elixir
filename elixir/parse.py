@@ -48,6 +48,7 @@ import shutil
 import subprocess
 import tempfile
 
+
 def _shell_lines(data):
     '''data as the line list a shell tool saw: split on newlines, a
     partial final line kept, a trailing empty line dropped'''
@@ -100,7 +101,7 @@ def _chunk_ctags(flags, entries, stderr_out=None):
             keys_by_path[path] = key
             paths.append(path)
         p = subprocess.run((b'ctags', b'-x') + flags + tuple(paths),
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                           capture_output=True)
         # The exit status is ignored: the pipelines swallowed it too
         if stderr_out is not None:
             stderr_out.append(p.stderr)
@@ -150,7 +151,7 @@ def _defs_C(blob, lines):
     #   ctags -x --kinds-c=+p+x --extras='-{anonymous}' "$full_path" |
     #   grep -avE -e '^operator ' -e '^CONFIG_' |
     #   awk '{print $1" "$2" "$3}'
-    lines = [l for l in lines if not _OPERATOR_OR_CONFIG.search(l)]
+    lines = [ln for ln in lines if not _OPERATOR_OR_CONFIG.search(ln)]
     return (_awk123(lines)
             + _scan(blob, _ENTRY)
             + _scan(blob, _SYSCALL_DEFINE, b'sys_'))
@@ -191,7 +192,7 @@ def parse_defs_chunk(items, stderr_out=None):
             groups.setdefault(family, []).append((i, blob, filename))
     for family, entries in groups.items():
         lines = _chunk_ctags(_DEFS_FLAGS[family], entries, stderr_out)
-        for i, blob, filename in entries:
+        for i, blob, _ in entries:
             out[i] = _PARSERS[family](blob, lines.get(i, ()))
     return out
 
@@ -261,7 +262,7 @@ _NAME_START = re.compile(rb'^' + _H + rb'*(\w+)\b')
 _WORD = re.compile(rb'\w+\Z')
 
 def _def_patterns(name):
-    '''The per-definition matches as (header, skip, starts_name)
+    r'''The per-definition matches as (header, skip, starts_name)
     callables: shape matches plus captured-name comparison for a
     plain \w+ name (the whole cost used to be compiling these), the
     perl's own per-name patterns otherwise'''
@@ -383,7 +384,7 @@ def _doc_comments(blob, lines):
 _DOCS_FLAGS = (b'--c-kinds=+p-m', b'--language-force=C')
 
 def parse_doc_comments_chunk(blobs, stderr_out=None):
-    '''parse_doc_comments for a chunk of blobs: the b"/\*\*" gate first
+    r'''parse_doc_comments for a chunk of blobs: the b"/\*\*" gate first
     (a doc comment needs an opener, and 80% of kernel C/H files have
     none at all, so most blobs never reach ctags), then ONE ctags for
     the chunk's survivors. The ^operator grep happened before the
@@ -397,8 +398,8 @@ def parse_doc_comments_chunk(blobs, stderr_out=None):
         return out
     lines = _chunk_ctags(_DOCS_FLAGS, entries, stderr_out)
     for i, blob, _ in entries:
-        blob_lines = [l for l in lines.get(i, ())
-                      if not l.startswith(b'operator ')]
+        blob_lines = [ln for ln in lines.get(i, ())
+                      if not ln.startswith(b'operator ')]
         out[i] = _doc_comments(blob, _awk123(blob_lines))
     return out
 

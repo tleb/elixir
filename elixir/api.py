@@ -19,9 +19,10 @@
 
 import falcon
 
-from .query import get_query
 from .lib import validFamily
+from .query import get_query
 from .web_utils import validate_version
+
 
 class ApiIdentGetterResource:
     def on_get(self, req, resp, project, ident):

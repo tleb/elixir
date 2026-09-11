@@ -1,0 +1,34 @@
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# A practical core: pycodestyle (E/W), pyflakes (F, catches unused
+# imports/variables), isort (I), bugbear (B, real hazards), pyupgrade
+# (UP), comprehensions (C4).
+select = ["E", "W", "F", "I", "B", "UP", "C4"]
+ignore = [
+    # Ported codebase: long SQL/regex/comment lines and printf-style
+    # formatting are the inherited idiom; adopting the formatter and
+    # f-strings wholesale is a separate, diff-noisy task
+    "E501",
+    "UP031",
+    # Named lambdas: the ported style, harmless
+    "E731",
+    # typing.List -> list churn without value here
+    "UP006",
+    "UP035",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The harness scripts set up sys.path before they can import the tree
+"t/equiv/*.py" = ["E402"]
+"t/*" = ["E402"]
+# update.py: module docstring and cross-phase helpers sit above late imports
+"update.py" = ["E402"]
+# Lexer test inputs embed significant trailing whitespace and
+# whitespace-only lines: raw lexing data, not formatting
+"elixir/lexers/tests/test_c.py" = ["W291"]
+"elixir/lexers/tests/test_kconfig.py" = ["W293"]
+# Legacy shell-companion tools, kept as shipped
+"utils/*" = ["E402", "F405"]

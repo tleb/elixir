@@ -1,5 +1,7 @@
 import re
+
 from .utils import Filter, FilterContext, extension_matches
+
 
 # Filters for dts includes as follows:
 # Replaces include directives in dts/dtsi files with links to source
@@ -14,7 +16,7 @@ class DtsiFilter(Filter):
         def keep_dtsi(m):
             return f'{ m.group(1) }/include/{ m.group(2) }"__KEEPDTSI__{ self.keep(m.group(3)) }"'
 
-        return re.sub('^(\s*)/include/(\s*)\"(.*?)\"', keep_dtsi, code, flags=re.MULTILINE)
+        return re.sub('^(\\s*)/include/(\\s*)\"(.*?)\"', keep_dtsi, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_dtsi(m):

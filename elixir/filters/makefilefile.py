@@ -1,6 +1,8 @@
-from os.path import dirname
 import re
+from os.path import dirname
+
 from .utils import Filter, FilterContext, filename_without_ext_matches
+
 
 # Filters for files listed in Makefiles
 # path/file
@@ -22,7 +24,7 @@ class MakefileFileFilter(Filter):
             else:
                 return m.group(0)
 
-        return re.sub('(?:(?<=\s|=)|(?<=-I))(?!/)([-\w/]+/[-\w\.]+)(\s+|\)|$)', keep_makefilefile, code, flags=re.MULTILINE)
+        return re.sub(r'(?:(?<=\s|=)|(?<=-I))(?!/)([-\w/]+/[-\w\.]+)(\s+|\)|$)', keep_makefilefile, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_makefilefile(m):

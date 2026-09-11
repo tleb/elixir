@@ -32,7 +32,7 @@ def test_lexers_suite():
     result = subprocess.run(
         [sys.executable, '-m', 'pytest', '-q', 'elixir/lexers/tests'],
         cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        universal_newlines=True)
+        text=True)
     if 'No module named pytest' in result.stdout:
         pytest.skip('pytest not available')
     assert result.returncode == 0, result.stdout

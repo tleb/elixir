@@ -30,8 +30,8 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-import io
 import hashlib
+import io
 import json
 import os
 import re
@@ -40,8 +40,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-
-import pytest
 
 from conftest import TAG
 
@@ -60,7 +58,7 @@ def search(query, ident, family):
 # this through `script.sh list-tags` before building the database.
 def test_one_tag(testenv):
     result = subprocess.run(['git', '-C', testenv.repo_dir, 'tag'],
-                            stdout=subprocess.PIPE, universal_newlines=True)
+                            stdout=subprocess.PIPE, text=True)
     assert result.returncode == 0
     assert result.stdout.split() == [TAG]
 
@@ -78,7 +76,7 @@ def update(env):
         [sys.executable, str(REPO_ROOT / 'update.py')],
         env=env.env(), cwd=REPO_ROOT,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        universal_newlines=True)
+        text=True)
 
 
 def canonical_hash(env):
@@ -275,7 +273,7 @@ def test_update_log_format(build_env, tmp_path):
     # The machine line parses as JSON with every phase and the walk's
     # counters (total_new cross-checks phase 1's count: the walk's
     # new-blob condition is exactly what update_blob_ids applies)
-    line = next(l for l in result.stdout.splitlines() if 'SUMMARY {' in l)
+    line = next(ln for ln in result.stdout.splitlines() if 'SUMMARY {' in ln)
     summary = json.loads(line.split('SUMMARY ', 1)[1])
     assert summary['project'] == 'testproj'
     assert summary['tags'] == 4

@@ -1,6 +1,7 @@
 from ..lexers import CLexer
 from .base import LexerTest
 
+
 class CLexerTest(LexerTest):
     lexer_cls = CLexer
     default_filtered_tokens = ("SPECIAL", "COMMENT", "STRING", "IDENTIFIER", "SPECIAL", "ERROR")

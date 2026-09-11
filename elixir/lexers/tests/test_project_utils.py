@@ -1,7 +1,7 @@
 import unittest
 
+from elixir.lexers.lexers import CLexer, DTSLexer, GasLexer, KconfigLexer, MakefileLexer
 from elixir.project_utils import get_lexer
-from elixir.lexers.lexers import CLexer, MakefileLexer, DTSLexer, GasLexer, KconfigLexer
 
 
 def lexer_class(path, project):

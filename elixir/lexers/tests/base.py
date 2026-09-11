@@ -1,5 +1,6 @@
 import unittest
 
+
 class LexerTest(unittest.TestCase):
     default_filtered_tokens = ("SPECIAL", "COMMENT", "STRING", "IDENTIFIER", "SPECIAL", "ERROR")
 
@@ -45,9 +46,11 @@ class LexerTest(unittest.TestCase):
                 last_line_contents_left = None
 
     # Lex code, do basic soundness checks on tokens (lines and positions) and compare lexing results with a list of tokens
-    def lex(self, code, expected, filtered_tokens=None, lexer_options={}):
+    def lex(self, code, expected, filtered_tokens=None, lexer_options=None):
         if filtered_tokens is None:
             filtered_tokens = self.default_filtered_tokens
+        if lexer_options is None:
+            lexer_options = {}
 
         code = code.lstrip()
         tokens = list(self.lexer_cls(code, **lexer_options).lex())
@@ -60,6 +63,7 @@ class LexerTest(unittest.TestCase):
             self.assertEqual(tokens, expected)
         except Exception as e:
             print()
-            for t in tokens: print(t, end=",\n")
+            for t in tokens:
+                print(t, end=",\n")
             raise e
 

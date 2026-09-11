@@ -1,5 +1,7 @@
 import re
+
 from .utils import Filter, FilterContext
+
 
 # Filter for kconfig identifier links
 # Replaces KConfig identifiers with links to definitions and references
@@ -11,7 +13,7 @@ class KconfigIdentsFilter(Filter):
       def keep_kconfigidents(m):
           return f'__KEEPKCONFIGIDENTS__{ self.keep(m.group(1)) }'
 
-      return re.sub('\033\[31m(?=CONFIG_)(.*?)\033\[0m', keep_kconfigidents, code, flags=re.MULTILINE)
+      return re.sub('\033\\[31m(?=CONFIG_)(.*?)\033\\[0m', keep_kconfigidents, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_kconfigidents(m):

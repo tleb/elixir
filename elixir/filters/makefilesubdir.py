@@ -1,6 +1,8 @@
-from os.path import dirname
 import re
+from os.path import dirname
+
 from .utils import Filter, FilterContext, filename_without_ext_matches
+
 
 # Filters for Makefile directory includes as follows:
 # subdir-y += dir
@@ -15,7 +17,7 @@ class MakefileSubdirFilter(Filter):
             n = self.keep(m.group(5))
             return f'{ m.group(1) }{ m.group(2) }{ m.group(3) }{ m.group(4) }__KEEPMAKESUBDIR__{ n }{ m.group(6) }'
 
-        return re.sub('(subdir-y)(\s+)(\+=|:=)(\s+)([-\w]+)(\s*|$)', keep_makefilesubdir, code, flags=re.MULTILINE)
+        return re.sub(r'(subdir-y)(\s+)(\+=|:=)(\s+)([-\w]+)(\s*|$)', keep_makefilesubdir, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_makefilesubdir(m):

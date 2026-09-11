@@ -89,7 +89,7 @@ def build_db(env: TestEnv):
     result = subprocess.run(
         [sys.executable, str(REPO_ROOT / 'update.py')],
         env=env.env(), cwd=REPO_ROOT,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert result.returncode == 0, result.stdout
     assert any(data_dir.iterdir()), 'update.py left the data directory empty'
 
@@ -136,5 +136,6 @@ def client(testenv):
     """In-process falcon client for the web and API routes (replaces the
     t/web_cgi.py CGI shim the perl tests used)"""
     from falcon import testing
+
     from elixir.web import get_application
     return testing.TestClient(get_application())

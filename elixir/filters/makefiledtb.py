@@ -1,6 +1,8 @@
-from os.path import dirname
 import re
+from os.path import dirname
+
 from .utils import Filter, FilterContext, filename_without_ext_matches
+
 
 # Filters for Makefile file includes like these:
 # dtb-y += file.dtb
@@ -14,7 +16,7 @@ class MakefileDtbFilter(Filter):
         def keep_makefiledtb(m):
             return f'__KEEPMAKEFILEDTB__{ self.keep(m.group(1)) }.dtb'
 
-        return re.sub('(?<=\s)([-\w/+\.]+)\.dtb', keep_makefiledtb, code, flags=re.MULTILINE)
+        return re.sub(r'(?<=\s)([-\w/+\.]+)\.dtb', keep_makefiledtb, code, flags=re.MULTILINE)
 
     def untransform_formatted_code(self, ctx: FilterContext, html: str) -> str:
         def replace_makefiledtb(m):
@@ -27,5 +29,5 @@ class MakefileDtbFilter(Filter):
             npath = f'{ filedir }{ w }.dts'
             return f'<a href="{ ctx.get_absolute_source_url(npath) }">{ w }.dtb</a>'
 
-        return re.sub('__KEEPMAKEFILEDTB__([A-J]+)\.dtb', replace_makefiledtb, html, flags=re.MULTILINE)
+        return re.sub(r'__KEEPMAKEFILEDTB__([A-J]+)\.dtb', replace_makefiledtb, html, flags=re.MULTILINE)
 

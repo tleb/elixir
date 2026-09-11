@@ -114,7 +114,7 @@ def run_capture(manifest_path, out, proj_dir, workers=1, dump_hash=True, force=F
         merged = [None] * len(entries)
         for n, chunk in enumerate(chunks):
             part = _as_compressed(f'{rec_path}.part{n}')
-            for e, rec in zip(chunk, common.iter_records_file(part)):
+            for e, rec in zip(chunk, common.iter_records_file(part), strict=True):
                 merged[e['i']] = rec
             os.remove(part)
         kind = common.compression_kind() or 'gzip'
