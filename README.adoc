@@ -9,7 +9,7 @@ https://en.wikipedia.org/wiki/LXR_Cross_Referencer[LXR]. It's written
 in Python and its main purpose is to index every release of a C or C{pp}
 project (like the Linux kernel) while keeping a minimal footprint.
 
-It uses Git as a source-code file store and Berkeley DB for cross-reference
+It uses Git as a source-code file store and DuckDB for cross-reference
 data. Internally, it indexes Git _blobs_ rather than trees of files to avoid
 duplicating work and data. It has a straightforward data structure
 (reminiscent of older LXR releases) to keep queries simple and fast.
@@ -25,7 +25,7 @@ toc::[]
 * Git (to clone this repository)
 * Docker (or a compatible container runtime)
 
-All other dependencies (Python 3 and its libraries, Berkeley DB,
+All other dependencies (Python 3 and its libraries, DuckDB,
 Universal Ctags, Apache) are bundled in the Docker image.
 
 Running the test suite on a host has additional requirements, see the
@@ -53,9 +53,10 @@ sub-directory per project:
     repo/
 ----
 
-`data` holds the cross-reference databases and `repo` the bare git
-repository of the project. The `index` command creates and fills these
-directories, so you normally never manipulate them yourself.
+`data` holds the cross-reference database (`data.duckdb`, see
+<<_the_data_layer>>) and `repo` the bare git repository of the project. The
+`index` command creates and fills these directories, so you normally never
+manipulate them yourself.
 
 == Build the Docker image
 
@@ -98,11 +99,11 @@ Run it again at any time to index newly released versions.
 You can set `$ELIXIR_THREADS` if you want to change the number of threads used by
 update.py for indexing (by default the number of CPUs on your system).
 
-`update.py` indexes the new tags one at a time, the oldest first, and
-`utils/index` runs it after each fetch.
+`update.py` indexes the new tags one at a time, the oldest first, in one
+transaction per tag, and `utils/index` runs it after each fetch.
 
 ____
-Generating the full database can take a long time: it takes about 15 hours on a Xeon E3-1245 v5 to index 1800 tags in the Linux kernel. Progress is recorded after each tag, so you can interrupt indexing and run it again later to continue where it stopped. You can even create a new Git repository and just create one tag instead of using the official kernel repository which is very large.
+Generating the full database can take a long time: it takes about 15 hours on a Xeon E3-1245 v5 to index 1800 tags in the Linux kernel. Progress is committed after each tag, so you can interrupt indexing and run it again later to continue where it stopped. You can even create a new Git repository and just create one tag instead of using the official kernel repository which is very large.
 ____
 
 After indexing is done, Elixir should be available under the following URL on your host:
@@ -139,6 +140,63 @@ into `/usr/local/elixir/` in the container when running `docker run elixir`.
 Changes in the code made on the host should be automatically reflected in the container.
 You can use `apache2ctl` to restart Apache.
 Error logs are available in `/var/log/apache2/error.log` within the container.
+
+== Updating a live deployment without downtime
+
+DuckDB's lock model allows exactly one read-write opener (the indexer)
+or any number of read-only openers (the web/API workers), never both
+on the same file at the same time. Serving and indexing therefore run
+on separate copies, swapped by operations — Elixir itself has no
+data-dir rotation logic:
+
+. The web/API containers serve from a copy of `data.duckdb` they only
+open read-only.
+. A separate indexing container (or a one-off `docker run --entrypoint
+index ...`) updates its own copy of the project's `data/` directory;
+`update.py` leaves one clean, checkpointed `data.duckdb` (no WAL, no
+scratch files) when it finishes.
+. Rotation is an ops concern: copy the fresh file over the served copy
+and restart/reload the serving containers. A half-copied file is
+never observed because readers open it once at request time.
+
+== The data layer
+
+All cross-reference data of a project is one DuckDB database,
+`<project>/data/data.duckdb` (`elixir/data_duckdb.py` is the access
+layer):
+
+* `blobs`, `versions` and `idents` are small dimension tables with a
+PRIMARY KEY; their integer ids are dense counters assigned by
+`update.py` in deterministic walk order (no sequences). `idents`
+additionally carries an ART index on `name` — the query hot path.
+* `version_objects`, `defs`, `refs` and `docs` are fact tables with no
+constraints and no indexes: their access path is physical clustering.
+`update.py` writes them through staging twins (`<table>_stage`, hidden
+from readers by the `<table>_all` views) and rebuilds each main table
+ordered by its cluster key (leading `identid`) at the end of the run,
+so ident lookups scan one contiguous range.
+
+Each indexed tag commits as one transaction. A killed run loses at
+most the tag in flight and resumes at the last committed tag when run
+again; there is no refusal or lock-out state after a crash.
+
+Determinism is a property, and it is checked: the logical content of
+a database is a deterministic function of the input walk, so two
+fresh indexes of the same repository hash identically under
+`data_duckdb.canonical_dump()` (a byte-stable dump of every table in
+key order). `update.py` verifies `check_invariants()` (dense ids,
+referential integrity, refs only for defined idents, the per-ident
+definition-family bitmasks) after every run and fails loudly instead
+of publishing a broken database.
+
+[WARNING]
+====
+The DuckDB file format is not stable across releases: a
+`data.duckdb` written by one version of DuckDB may not open under
+another. Keep `duckdb` and `pyarrow` pinned exactly (as
+`requirements.txt` does, in sync with the Docker image) and expect a
+full re-index when upgrading them.
+====
 
 = REST API usage
 
@@ -217,8 +275,7 @@ was built as shown earlier):
 == On the host
 
 Running the suite on a host requires: Git, Python >= 3.8 with the
-packages listed in `requirements.txt` (including `berkeleydb`, which needs
-the Berkeley DB development files to build), and Universal Ctags.
+packages listed in `requirements.txt`, and Universal Ctags.
 From the top-level Elixir directory, run:
 
  python3 -m pytest t/
