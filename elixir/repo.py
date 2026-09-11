@@ -633,38 +633,66 @@ def list_blobs(repo_dir, tag):
 
 
 class BlobLists:
-    '''Per-tag blob lists packed into one plaintext scratch file,
-    "hash path" lines in ls-tree order: written once by an upfront
-    walk of every tag, read back per tag during indexing, so the
-    lists live on disk, not in memory. The filename is not stored;
-    get() recomputes it, and returns exactly list_blobs()'s triples
-    in exactly list_blobs()'s order — the reconstruction the dump's
+    '''Per-tag blob lists packed into plaintext segment files,
+    "hash path" lines in ls-tree order: written by the upfront walk of
+    every tag (one segment per walk worker range, plus a fresh first
+    segment for a serial writer), read back per tag during indexing, so
+    the lists live on disk, not in memory. The filename is not stored;
+    get() recomputes it, and returns exactly list_blobs()'s triples in
+    exactly list_blobs()'s order — the reconstruction the dump's
     byte-identity hangs on. A hash contains no space and git quotes
-    paths with control characters (newlines included), so one line
-    is always one blob.'''
-    def __init__(self, filename):
-        self.f = open(filename, 'w+b')
-        self.slices = {} # tag -> (offset, length) in the file
+    paths with control characters (newlines included), so one line is
+    always one blob. Segment order carries no meaning: a tag is read
+    from whichever segment's slice the index points at.'''
+    def __init__(self, *segments):
+        '''Each segment is either a path — a fresh file add() packs
+        into, the single-segment writer shape — or a (path,
+        [(tag, offset, length), ...]) pair: a segment the walk already
+        packed, with the per-tag slices its worker returned'''
+        self.paths = []
+        self.slices = {} # tag -> (segment index, offset, length)
+        self.w = None # add()'s handle into paths[0], opened on first add
+        for segment in segments:
+            if isinstance(segment, tuple):
+                path, tag_slices = segment
+                i = len(self.paths)
+                self.paths.append(path)
+                for tag, offset, length in tag_slices:
+                    self.slices[tag] = (i, offset, length)
+            else:
+                self.paths.append(segment)
 
     def add(self, tag, blobs):
-        '''Append one tag's (hash, filename, path) triples; the
-        filename is dropped here and recomputed by get()'''
-        start = self.f.tell()
+        '''Append one tag's (hash, filename, path) triples to the
+        first segment; the filename is dropped here and recomputed by
+        get(). Returns the append's (offset, length) within the
+        segment, so a caller driving several segments (the walk
+        workers) keeps its own slice index'''
+        if self.w is None:
+            self.w = open(self.paths[0], 'w+b')
+        start = self.w.tell()
         for hash, _, path in blobs:
-            self.f.write(hash + b' ' + path + b'\n')
-        self.slices[tag] = (start, self.f.tell() - start)
+            self.w.write(hash + b' ' + path + b'\n')
+        self.w.flush() # get() reads through its own handle
+        length = self.w.tell() - start
+        self.slices[tag] = (0, start, length)
+        return start, length
 
     def get(self, tag):
-        offset, length = self.slices[tag]
-        self.f.seek(offset)
+        i, offset, length = self.slices[tag]
+        with open(self.paths[i], 'rb') as f:
+            f.seek(offset)
+            data = f.read(length)
         blobs = []
-        for line in self.f.read(length).split(b'\n')[:-1]:
+        for line in data.split(b'\n')[:-1]:
             hash, _, path = line.partition(b' ')
             blobs.append((hash, os.path.basename(path), path))
         return blobs
 
     def close(self):
-        self.f.close()
+        if self.w is not None:
+            self.w.close()
+            self.w = None
 
 
 _batch_tls = local()

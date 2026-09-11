@@ -25,10 +25,11 @@
 # Indexing runs in phases, in dependency order, one tag at a time
 # (oldest first): a tag is fully indexed before the next one starts, so
 # refs cannot race defs of another tag. Before the phases run, one
-# blocking walk lists every new tag's blobs up front into a packed
-# scratch file and counts the new blobs: indexing then reads its blob
-# lists from disk (memory stays flat however many tags remain) and the
-# run's remaining work is known exactly from the first tag line. The
+# blocking walk lists every new tag's blobs up front into packed
+# scratch segments (one per worker range) and counts the new blobs:
+# indexing then reads its blob lists from disk (memory stays flat
+# however many tags remain) and the run's remaining work is known
+# exactly from the first tag line. The
 # phases for one tag:
 #   1. ids:    assign idx numbers to the tag's new blobs
 #   2. vers:   the tag's blob paths, into version_objects
@@ -298,12 +299,14 @@ fam_bits = ' '.join("WHEN '%s' THEN %d" % (f, b)
 
 # ---- The pool's work units ----
 # Every worker function is module-level (picklable by reference) and
-# takes ONE item tuple: (phase, tag_no, chunk_no, triples, project,
-# repo_dir, data_dir). The spawned workers share nothing with the
-# parent, so the trailing three — everything the phases need beyond
-# the chunk itself — travel with every item: project picks the refs
-# scanners/lexers, repo_dir feeds repo.get_blob*'s cat-file pipes,
-# data_dir is where the scratch file lands.
+# takes ONE item tuple. The phase workers below take (phase, tag_no,
+# chunk_no, triples, project, repo_dir, data_dir); the spawned
+# workers share nothing with the parent, so the trailing three —
+# everything the phases need beyond the chunk itself — travel with
+# every item: project picks the refs scanners/lexers, repo_dir feeds
+# repo.get_blob*'s cat-file pipes, data_dir is where the scratch file
+# lands. The walk worker takes (range_no, tags, repo_dir, data_dir):
+# the same dirs, a contiguous range of tags instead of a chunk.
 
 def update_definitions(item):
     '''One chunk of the defs phase, in a pool process: ONE ctags per
@@ -508,6 +511,34 @@ def update_compatibles_bindings(item):
     return b'', path
 
 
+def walk_tag_range(item):
+    '''One CONTIGUOUS RANGE of the upfront tag walk, in a pool worker:
+    per tag, the same ls-tree and parse list_blobs does (the run's
+    serial walk), packed into the range's OWN segment file (hash path
+    lines, ls-tree order) and walk-hashes Arrow file (the same schema
+    the single-file walk wrote). Returns (the two paths, per-tag
+    (tag, offset, length) slices within the segment, the range's
+    walked-blob count) — never the blob lists: pickling them back
+    would dwarf the parallelism's savings'''
+    range_no, tags, repo_dir, data_dir = item
+    lists_path = os.path.join(data_dir, 'tmp-blobwalk-lists-%04d' % range_no)
+    hashes_path = os.path.join(data_dir,
+                               'tmp-arrow-walk-hashes-%04d.arrow' % range_no)
+    lists = repo.BlobLists(lists_path)
+    hashes = IpcWriter(hashes_path, WALK_SCHEMA)
+    slices = []
+    walked = 0
+    for tag in tags:
+        blobs = repo.list_blobs(repo_dir, tag)
+        slices.append((tag,) + lists.add(tag, blobs))
+        for hash, _, _ in blobs:
+            hashes.add((hash,))
+        walked += len(blobs)
+    hashes.close()
+    lists.close()
+    return lists_path, hashes_path, slices, walked
+
+
 # ---- Phase ingestion: the per-row BDB work, as SQL ----
 # Streaming: results arrive in chunk order and are ingested in
 # consecutive batches, so arrival order IS seq order and
@@ -642,8 +673,7 @@ def run(repo_dir, data_dir, project=None):
     pool = None
     conn = None
     blob_lists = None
-    lists_path = os.path.join(data_dir, 'tmp-blobwalk-lists')
-    hashes_path = os.path.join(data_dir, 'tmp-arrow-walk-hashes.arrow')
+    walk_segments = [] # the walk's segment files, removed in finally
     walked_blobs = 0
     total_new = 0
     walk_s = 0.0
@@ -684,36 +714,60 @@ def run(repo_dir, data_dir, project=None):
             % (project, num_tags, repo_dir, data_dir, num_threads))
 
         # ---- Walk: every tag's blobs, up front, on disk ----
-        # One blocking pass before any indexing: list each tag's blobs
-        # into a packed scratch file (same per-tag blob order the lazy
-        # calls produced) and collect the walked hashes into an Arrow
-        # file. The new count then falls out of SQL — distinct walked
-        # hashes absent from the blobs table — where the old walk paid
-        # a scratch BDB for the dedup.
+        # One blocking pass before any indexing, fanned out over the
+        # pool (idle until now) in CONTIGUOUS RANGES of tags — tag
+        # order = range order, so each tag's list stays one worker's
+        # own sequential ls-tree parse, byte-identical to the serial
+        # walk's. Each range's worker packs its tags into its OWN
+        # segment file and walk-hashes Arrow file and returns only
+        # per-tag slices, never the blob lists. The parent's slice
+        # index then maps tag -> (segment, offset, length), get()
+        # reads its slice from the right segment, and the new count
+        # falls out of SQL over ALL the hash files — distinct walked
+        # hashes absent from the blobs table — a query order-free in
+        # the files, where the old walk paid a scratch BDB for the
+        # dedup.
         if num_tags:
-            blob_lists = repo.BlobLists(lists_path)
-            hashes = IpcWriter(hashes_path, WALK_SCHEMA)
             walk_start = time.monotonic()
-            last_walk_log = walk_start
-            for n, tag in enumerate(tag_buf, 1):
-                blobs = repo.list_blobs(repo_dir, tag)
-                blob_lists.add(tag, blobs)
-                for hash, _, _ in blobs:
-                    hashes.add((hash,))
-                walked_blobs += len(blobs)
-                t = time.monotonic()
-                if n < num_tags and t - last_walk_log >= progress_min_interval:
-                    log('walking tags %d/%d …' % (n, num_tags))
-                    last_walk_log = t
-            hashes.close()
+            # Four ranges per worker, not one: a tag's walk cost grows
+            # with its tree, and the early ranges of a one-range split
+            # would finish while the last grinds the big modern trees;
+            # imap hands the next range to whichever worker frees
+            # first, so the oversubscription is the load balance
+            n_ranges = min(num_tags, num_threads * 4)
+            size = -(-num_tags // n_ranges)
+            ranges = [tag_buf[i:i + size] for i in range(0, num_tags, size)]
+            items = [(no, tags, repo_dir, data_dir)
+                     for no, tags in enumerate(ranges)]
 
-            conn.register('walk_hashes', pads.dataset(hashes_path, format='ipc'))
+            last_walk_log = walk_start
+            segments = []
+            hashes_files = []
+            walked_tags = 0
+            for item, result in zip(items, pool.imap(walk_tag_range, items),
+                                    strict=True):
+                lists_path, hashes_path, slices, blobs = result
+                segments.append((lists_path, slices))
+                hashes_files.append(hashes_path)
+                walk_segments.append(lists_path)
+                walked_blobs += blobs
+                walked_tags += len(item[1])
+                t = time.monotonic()
+                if (walked_tags < num_tags and
+                        t - last_walk_log >= progress_min_interval):
+                    log('walking tags %d/%d …' % (walked_tags, num_tags))
+                    last_walk_log = t
+            blob_lists = repo.BlobLists(*segments)
+
+            conn.register('walk_hashes', pads.dataset(
+                [str(f) for f in hashes_files], format='ipc'))
             total_new = conn.execute('''
                 SELECT count(*) FROM (SELECT DISTINCT blobhash FROM walk_hashes) w
                 WHERE NOT EXISTS (SELECT 1 FROM blobs b WHERE b.blobhash = w.blobhash)
                 ''').fetchone()[0]
             conn.unregister('walk_hashes')
-            os.remove(hashes_path) # its work ends with the walk
+            for path in hashes_files: # their work ends with the walk
+                os.remove(path)
 
             walk_s = time.monotonic() - walk_start
             log('walk done: %d tags, %d blobs walked, %d new, %s'
@@ -1123,7 +1177,8 @@ def run(repo_dir, data_dir, project=None):
             conn.close()
         if blob_lists is not None:
             blob_lists.close()
-            os.remove(lists_path)
+        for path in walk_segments:
+            os.remove(path)
 
     for v in violations:
         log('%s: INVARIANT VIOLATION: %s' % (project, v))
