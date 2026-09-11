@@ -389,22 +389,30 @@ def update_versions(tag, blobs, occ_blobids):
 # ---- Phase 3a: defs (thread pool: ctags waits release the GIL) ----
 
 def update_definitions(item):
-    '''One chunk of the defs phase, in a pool process: ctags per blob
-    through the batch reader, every def line as one scratch row (the
-    deftype letter mapped to its name, unknown letters kept for the
-    def-line map and filtered at insert). Returns the chunk's captured
-    ctags stderr and its scratch file, never printing anything'''
+    '''One chunk of the defs phase, in a pool process: ONE ctags per
+    (chunk, family) over the chunk's blobs (parse_defs_chunk groups
+    and preserves input order — the per-blob parse_defs wrapper would
+    fork ctags once per blob, ~25s of pure exec overhead on a linux
+    tag), every def line as one scratch row (the deftype letter
+    mapped to its name, unknown letters kept for the def-line map and
+    filtered at insert). Returns the chunk's captured ctags stderr and
+    its scratch file, never printing anything'''
     phase, tag_no, chunk_no, triples = item
     stderr_out = []
-    rows = []
-    seq = chunk_no << 32
+    metas = []
+    items = []
     for idx, filename, hash in triples:
         family = lib.getFileFamily(filename)
         if family in [None, 'M']: continue
 
-        lines = parse.parse_defs(repo.get_blob(hash), filename, family,
-                                 stderr_out)
+        metas.append((idx, family))
+        items.append((repo.get_blob(hash), filename, family))
 
+    lines_by_blob = parse.parse_defs_chunk(items, stderr_out)
+
+    rows = []
+    seq = chunk_no << 32
+    for (idx, family), lines in zip(metas, lines_by_blob):
         for l in lines:
             ident, type, line = l.split(b' ')
             type = type.decode()
