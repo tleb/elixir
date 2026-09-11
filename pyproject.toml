@@ -1,3 +1,43 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "elixir"
+version = "1.0.0"
+requires-python = ">=3.10"
+dependencies = [
+    "falcon~=4.0.2",
+    "jinja2~=3.1.5",
+    "pygments~=2.18.0",
+    # DuckDB storage layer (elixir/data_duckdb.py); file format is not
+    # stable across releases, keep pinned
+    # NOTE keep in sync with wheel version in the Dockerfile
+    "duckdb~=1.5.5",
+    "pyarrow~=25.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest~=9.1",
+    "ruff~=0.14.14",
+    "vulture~=2.16",
+]
+
+[project.scripts]
+elixir = "elixir.cli:main"
+
+[tool.setuptools]
+# Flat layout: templates/ and static/ stay outside the package
+# (elixir/web.py resolves them via CURRENT_DIR). Subpackages listed
+# by hand so a built wheel carries them all.
+packages = [
+    "elixir",
+    "elixir.filters",
+    "elixir.lexers",
+    "elixir.lexers.tests",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
@@ -33,5 +73,3 @@ ignore = [
 # whitespace-only lines: raw lexing data, not formatting
 "elixir/lexers/tests/test_c.py" = ["W291"]
 "elixir/lexers/tests/test_kconfig.py" = ["W293"]
-# Legacy shell-companion tools, kept as shipped
-"utils/*" = ["E402", "F405"]

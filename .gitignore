@@ -1,10 +1,12 @@
 # Generated files
 __pycache__
 tags
+*.egg-info/
 /.cache/
 .idea/
 env/
 venv/
+.venv/
 /data/
 
 # Web-specific
