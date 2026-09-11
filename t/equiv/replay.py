@@ -92,6 +92,10 @@ def describe_diff(entry, expected, got):
 
 
 def run_replay(manifest_path, captures, proj_dir, max_diffs=20, report_path=None):
+    if not os.path.isdir(captures) or not os.path.exists(os.path.join(captures, 'meta.json')):
+        raise SystemExit(f'no frozen captures in {captures} — capture them from the '
+                         'pinned old side first (the linux2tag ones are T-E2\'s, '
+                         'after its old-side data rebuild)')
     meta = common.read_meta(captures)
 
     drift = common.check_versions_match(meta)

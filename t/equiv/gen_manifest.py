@@ -463,25 +463,24 @@ def gen_musl(M, s, repo, tier, rng):
 def gen_musl_beyond_A(M, s, tags, tier, rng):
     """Tier B: sampled-exhaustive (all idents x 8 sentinel versions via
     API, all trees x all versions, 10% stratified source pages); Tier C:
-    fully exhaustive. R3B §6."""
+    fully exhaustive (all idents x all versions, all files). R3B §6."""
     project = 'musl'
     sentinels = [tags[0], tags[len(tags) * 1 // 8], tags[len(tags) * 2 // 8],
                  tags[len(tags) * 3 // 8], tags[len(tags) // 2],
                  tags[len(tags) * 5 // 8], tags[len(tags) * 3 // 4], tags[-1]]
-    if tier == 'C':
-        sentinels = tags
+    api_versions = tags if tier == 'C' else sentinels
 
-    for i, ident in enumerate(s.idents_sorted()):
-        v = sentinels[i % len(sentinels)]
-        M.get(api_url(project, ident.decode()), 'api/all', q=f'version={v}')
+    for ident in s.idents_sorted():
+        for v in api_versions:
+            M.get(api_url(project, ident.decode()), 'api/all', q=f'version={v}')
 
     # trees across every indexed version
-    for v in (tags if tier == 'C' else sentinels):
+    for v in tags:
         for d in sorted({os.path.dirname(p) for p in s.vers[v].values()}):
             M.get(source_url(project, v, d), 'tree/all')
 
     # stratified source pages: 10% (tier B) / 100% (tier C)
-    for v in (tags if tier == 'C' else sentinels):
+    for v in api_versions:
         files = sorted(s.vers[v].values())
         if tier != 'C':
             files = rng.sample(files, max(1, len(files) // 10))
