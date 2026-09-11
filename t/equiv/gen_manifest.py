@@ -202,12 +202,30 @@ def git_tags(repo_dir, project):
     return [t.decode() for t in list_tags(repo_dir.encode(), project)]
 
 
+# Requests that never terminate under the pinned pygments (2.18.0):
+# DevicetreeLexer's 'statements' property lookahead
+#   (?=(?:\s*,\s*[a-zA-Z_][\w-]*|(?:\s*(?:/[*][^*/]*?[*]/\s*)*))*\s*[=;])
+# backtracks catastrophically on 'prop = <&phandle' followed by interleaved
+# /* */ comment lines; web.py format_code renders .dts source pages through
+# it, so the page never completes at any wall clock. There is no response
+# to pin, so the request is dropped from manifests entirely (a divergence
+# entry cannot express it). Screened exhaustively over the whole linux2tag
+# Tier B manifest (T-E2, te2-screen-*.py batch subprocesses): exactly this
+# one request hangs. Raw, tree and API URLs for the same path terminate
+# exactly and stay in. Re-screen if pygments or the web lexer choice moves.
+PATHOLOGICAL_REQUESTS = {
+    '/linux/v4.2/source/arch/arm/boot/dts/at91-ariag25.dts',
+}
+
+
 class Manifest:
     def __init__(self):
         self.entries = []
         self._seen = set()
 
     def add(self, note, m, p, q=None, h=None, b=None):
+        if p in PATHOLOGICAL_REQUESTS:
+            return
         key = (m, p, q, b)
         if key in self._seen:  # same request from another stratum: skip
             return
