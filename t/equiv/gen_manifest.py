@@ -270,6 +270,11 @@ def qseg(s):
 
 
 def source_url(project, v, path):
+    # canonicalize: tree callers pass dirname() output (no leading '/'),
+    # file callers pass '/file'; without this the URL glues onto 'source'
+    # and the request becomes a 400 error page, not a tree/file view
+    if path and not path.startswith('/'):
+        path = '/' + path
     return f'/{project}/{qseg(v)}/source{path}'
 
 
