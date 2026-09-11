@@ -9,7 +9,7 @@ fi
 # $1 is the project path (inside will be created data/ and repo/).
 # It supports being called on an existing project.
 project_init() {
-    # update.py expects the data directory to exist; mkdir is idempotent
+    # elixir update expects the data directory to exist; mkdir is idempotent
     # and must also run for already-initialized repositories.
     mkdir -p $1/data
 
@@ -64,12 +64,13 @@ project_fetch() {
 # $1 is the project path (parent of data/ and repo/).
 project_index() {
     elixir_sources="$(dirname "$(dirname "$0")")"
+    root="$(dirname "$1")"
+    project="$(basename "$1")"
 
-    # update.py indexes the new tags one at a time, deterministically
+    # elixir update indexes the new tags one at a time, deterministically
     # (references are only recorded for definitions already in the
     # database), so one call is enough. It uses every CPU by itself.
-    LXR_REPO_DIR=$1/repo LXR_DATA_DIR=$1/data \
-        python3 "$elixir_sources/update.py"
+    (cd "$elixir_sources" && python3 -m elixir -C "$root" update "$project")
 }
 
 # $1 is the Elixir root data path.

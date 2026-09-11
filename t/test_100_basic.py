@@ -64,7 +64,7 @@ def test_one_tag(testenv):
 
 
 # The database is one DuckDB file now; nothing BDB-shaped may
-# appear in a data directory the new update.py wrote
+# appear in a data directory the new updater wrote
 def test_db_files(testenv):
     data_dir = Path(testenv.data_dir)
     assert (data_dir / 'data.duckdb').is_file()
@@ -73,9 +73,8 @@ def test_db_files(testenv):
 
 def update(env):
     return subprocess.run(
-        [sys.executable, str(REPO_ROOT / 'update.py')],
-        env=env.env(), cwd=REPO_ROOT,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        [sys.executable, '-m', 'elixir', '-C', env.proj_dir, 'update', 'testproj'],
+        cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True)
 
 
@@ -128,8 +127,9 @@ def test_update_sigkill_resume_completes(build_env, tmp_path):
         shutil.rmtree(env.data_dir)
         os.mkdir(env.data_dir)
         proc = subprocess.Popen(
-            [sys.executable, str(REPO_ROOT / 'update.py')],
-            env=env.env(), cwd=REPO_ROOT,
+            [sys.executable, '-m', 'elixir', '-C', env.proj_dir,
+             'update', 'testproj'],
+            cwd=REPO_ROOT,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(offset)
         if proc.poll() is None:
@@ -241,7 +241,7 @@ def test_update_log_format(build_env, tmp_path):
         subprocess.run(git + ['tag', 'v5.%d' % (i + 3)], check=True)
 
     # Re-index from scratch with the output captured: build_env's
-    # own update.py run happened before the fixture returned its env
+    # own indexing run happened before the fixture returned its env
     shutil.rmtree(env.data_dir)
     os.mkdir(env.data_dir)
 

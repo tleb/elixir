@@ -3,8 +3,9 @@
 #
 # The port runs the whole stack in one process where possible: query.py's
 # assertions became direct elixir.query.Query calls, and the web/api tests
-# drive the falcon app in-process. Only update.py stays a subprocess, since
-# it is a script, not an importable module.
+# drive the falcon app in-process. The indexer is importable now
+# (elixir.update.run); build_db still drives it through the elixir CLI as
+# a subprocess, the way deployments run it.
 #
 # This file is part of Elixir, a source code cross-referencer.
 #
@@ -34,7 +35,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-PROJECT = 'testproj'  # lib.currentProject() derives the project from the data dir's parent
+PROJECT = 'testproj'  # update.run() derives the project from the layout's parent dir
 TAG = 'v5.4'
 TREE = Path(__file__).resolve().parent / 'tree'
 
@@ -48,12 +49,11 @@ class TestEnv:
         self.data_dir = str(proj_dir / PROJECT / 'data')
 
     def env(self):
-        """LXR_* variables for subprocesses and the in-process app"""
+        """Environment for subprocesses: LXR_PROJ_DIR is what the web app
+        reads at request time"""
         return {
             **os.environ,
             'LXR_PROJ_DIR': self.proj_dir,
-            'LXR_REPO_DIR': self.repo_dir,
-            'LXR_DATA_DIR': self.data_dir,
         }
 
 
@@ -78,8 +78,8 @@ def build_repo(env: TestEnv):
 
 
 def build_db(env: TestEnv):
-    """Index the repo with update.py (build_db in TestEnvironment.pm),
-    through the same interpreter as the test run."""
+    """Index the repo through the elixir CLI (build_db in
+    TestEnvironment.pm), with the same interpreter as the test run"""
     data_dir = Path(env.data_dir)
     if data_dir.exists():
         shutil.rmtree(data_dir)
@@ -87,11 +87,10 @@ def build_db(env: TestEnv):
 
     # A failing run must fail the suite with its output visible
     result = subprocess.run(
-        [sys.executable, str(REPO_ROOT / 'update.py')],
-        env=env.env(), cwd=REPO_ROOT,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        [sys.executable, '-m', 'elixir', '-C', env.proj_dir, 'update', PROJECT],
+        cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert result.returncode == 0, result.stdout
-    assert any(data_dir.iterdir()), 'update.py left the data directory empty'
+    assert any(data_dir.iterdir()), 'update left the data directory empty'
 
 
 @pytest.fixture(scope='session')
@@ -114,11 +113,7 @@ def testenv(tmp_path_factory):
     build_repo(env)
     build_db(env)
 
-    os.environ.update({
-        'LXR_PROJ_DIR': env.proj_dir,
-        'LXR_REPO_DIR': env.repo_dir,
-        'LXR_DATA_DIR': env.data_dir,
-    })
+    os.environ['LXR_PROJ_DIR'] = env.proj_dir
     return env
 
 

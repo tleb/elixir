@@ -59,8 +59,6 @@ for repo in "$data_dir"/*/repo; do
     rm -rf "$out"
     mkdir -p "$out"
 
-    export LXR_REPO_DIR="$repo"
-
     "$script" list-tags > "$out/list-tags.out" || fail=1
     "$script" list-tags -h > "$out/list-tags-h.out" || fail=1
     "$script" get-latest-tags > "$out/get-latest-tags.out" || fail=1

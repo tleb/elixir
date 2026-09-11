@@ -22,7 +22,6 @@ import logging
 import os
 import re
 import subprocess
-import sys
 
 logger = logging.getLogger(__name__)
 
@@ -174,23 +173,6 @@ blacklist = (
     b'vcpu',
     b'x'
 )
-
-def getDataDir():
-    try:
-        return os.environ['LXR_DATA_DIR']
-    except KeyError:
-        print(sys.argv[0] + ': LXR_DATA_DIR needs to be set')
-        exit(1)
-
-def getRepoDir():
-    try:
-        return os.environ['LXR_REPO_DIR']
-    except KeyError:
-        print(sys.argv[0] + ': LXR_REPO_DIR needs to be set')
-        exit(1)
-
-def currentProject():
-    return os.path.basename(os.path.dirname(getDataDir()))
 
 # List all families supported by Elixir
 families = ['A', 'B', 'C', 'D', 'K', 'M']

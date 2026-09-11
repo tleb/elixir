@@ -38,8 +38,6 @@ import subprocess
 from dataclasses import dataclass
 from threading import local
 
-from elixir.lib import getRepoDir
-
 # Projects with DT bindings compatible strings support (script.sh's
 # dts_comp_support=1)
 DTS_COMP_SUPPORT = frozenset((
@@ -671,20 +669,31 @@ class BlobLists:
 
 _batch_tls = local()
 
-def get_blob(hash):
+def _batch_proc(repo_dir):
+    '''The thread's persistent `git cat-file --batch` for repo_dir,
+    started on first use and replaced when the repo changes or the
+    process died'''
+    p = getattr(_batch_tls, 'proc', None)
+    if p is not None and _batch_tls.repo_dir == repo_dir and p.poll() is None:
+        return p
+    if p is not None and p.poll() is None:
+        p.stdin.close() # EOF retires the old repository's reader
+        p.wait()
+    p = subprocess.Popen(['git', 'cat-file', '--batch'],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         cwd=repo_dir)
+    _batch_tls.proc = p
+    _batch_tls.repo_dir = repo_dir
+    return p
+
+def get_blob(repo_dir, hash):
     '''Blob content from a persistent per-thread `git cat-file --batch`
-    in the repository given by LXR_REPO_DIR (lib.getRepoDir).
+    in repo_dir.
 
     Same bytes as script('get-blob', hash) without one fork+exec of
     script.sh and git per blob. Responses arrive in request order; one
     process per thread needs no locking.'''
-    p = getattr(_batch_tls, 'batch', None)
-    if p is None or p.poll() is not None:
-        p = subprocess.Popen(['git', 'cat-file', '--batch'],
-                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             cwd=getRepoDir())
-        _batch_tls.batch = p
-
+    p = _batch_proc(repo_dir)
     p.stdin.write(hash + b'\n')
     p.stdin.flush()
 
@@ -695,11 +704,11 @@ def get_blob(hash):
     p.stdout.read(1) # newline after the payload
     return data
 
-def get_blob_lines(hash):
+def get_blob_lines(repo_dir, hash):
     '''get_blob() split into lines with scriptLines semantics:
     split(b'\\n') with the last element dropped, so a blob not ending
     in a newline loses its final (partial) line, as it always has'''
-    lines = get_blob(hash).split(b'\n')
+    lines = get_blob(repo_dir, hash).split(b'\n')
     del lines[-1]
     return lines
 

@@ -25,6 +25,7 @@
 
 import argparse
 import os
+import sys
 
 from elixir.query import Query
 
@@ -93,8 +94,32 @@ def register_query(subparsers):
     subparser.add_argument('path', type=str, help="The path of the source file")
     subparser.set_defaults(query_cmd=q_file)
 
-# Subcommand registry; later tasks append index/update/remote/serve
-subcommands = [register_query]
+# --- update: ported from update.py, now elixir.update.run() ---
+
+def run_update(args):
+    # Deferred: update pulls pyarrow and the multiprocessing machinery
+    # in, which the serving subcommands should not pay for
+    from elixir import update
+
+    failed = []
+    for name in args.projects:
+        project = os.path.join(os.getcwd(), name)
+        try:
+            update.run(os.path.join(project, 'repo'), os.path.join(project, 'data'))
+        except update.UpdateError as e:
+            print('elixir: update %s: %s' % (name, e), file=sys.stderr)
+            failed.append(name)
+    if failed:
+        raise SystemExit(1)
+
+def register_update(subparsers):
+    parser = subparsers.add_parser('update', help="Index the new tags of projects")
+    parser.add_argument('projects', nargs='+', metavar='project',
+                        help="Project name(s), under the current root")
+    parser.set_defaults(handler=run_update)
+
+# Subcommand registry; later tasks append index/remote/serve
+subcommands = [register_query, register_update]
 
 def main(argv=None):
     parser = argparse.ArgumentParser(

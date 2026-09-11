@@ -225,27 +225,26 @@ def test_get_blob_lines_scriptlines_semantics(monkeypatch):
         (b'a\n\nb\n', [b'a', b'', b'b']),
     ]
     for blob, expected in cases:
-        monkeypatch.setattr(repo, 'get_blob', lambda hash, _b=blob: _b)
-        assert repo.get_blob_lines(b'0' * 40) == expected, blob
+        monkeypatch.setattr(repo, 'get_blob', lambda repo_dir, hash, _b=blob: _b)
+        assert repo.get_blob_lines('r', b'0' * 40) == expected, blob
 
 
 @pytest.mark.skipif(not HAVE_CLONES,
                     reason=f'no elixir-data clones under {DATA_DIR}')
-def test_get_blob_matches_git_cat_file(monkeypatch):
+def test_get_blob_matches_git_cat_file():
     '''The persistent batch reader returns git cat-file blob bytes'''
     repo_dir = DATA_DIR / 'musl' / 'repo'
     hashes = [line.split()[2] for line in
               repo.git(repo_dir, 'ls-tree', '-r', 'v1.2.6').split(b'\n')
               if b' blob ' in line][:3]
-    monkeypatch.setenv('LXR_REPO_DIR', str(repo_dir))
     try:
         for h in hashes:
             expected = repo.git(repo_dir, 'cat-file', 'blob', h)
-            assert repo.get_blob(h) == expected
+            assert repo.get_blob(repo_dir, h) == expected
     finally:
         # Drop the TLS batch process before another test sees it
-        p = getattr(repo._batch_tls, 'batch', None)
+        p = getattr(repo._batch_tls, 'proc', None)
         if p is not None:
             p.stdin.close()
             p.wait()
-            del repo._batch_tls.batch
+            del repo._batch_tls.proc

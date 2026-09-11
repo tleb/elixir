@@ -93,15 +93,16 @@ Or, to run indexing in a separate container:
 You can also use `index /srv/elixir-data --all` to start indexing all officially supported repositories.
 
 The `index` command fetches the project's remotes (creating the bare
-repository on first run) and then runs `update.py` to build the databases.
-Run it again at any time to index newly released versions.
+repository on first run) and then runs the updater (`elixir update`) to
+build the databases. Run it again at any time to index newly released
+versions.
 
-`update.py` uses every CPU on the system; there is no thread-count knob.
+The updater uses every CPU on the system; there is no thread-count knob.
 `$ELIXIR_DDB_MEM` overrides DuckDB's ingest memory budget (by default a
 quarter of the RAM, so the indexing pool keeps room beside it).
 
-`update.py` indexes the new tags one at a time, the oldest first, in one
-transaction per tag, and `utils/index` runs it after each fetch.
+Tags are indexed one at a time, the oldest first, in one transaction per
+tag, and `utils/index` runs an update after each fetch.
 
 ____
 Generating the full database can take a long time: it takes about 15 hours on a Xeon E3-1245 v5 to index 1800 tags in the Linux kernel. Progress is committed after each tag, so you can interrupt indexing and run it again later to continue where it stopped. You can even create a new Git repository and just create one tag instead of using the official kernel repository which is very large.
@@ -112,13 +113,11 @@ http://localhost/musl/latest/source
 
 == Verifying the installation
 
-`utils.query` needs to know which project to work on,
-through the `LXR_REPO_DIR` and `LXR_DATA_DIR` environment variables:
+Query a project through the `elixir` command, addressing the project by
+name under the data root:
 
- # docker exec \
-    -e LXR_REPO_DIR=/srv/elixir-data/musl/repo \
-    -e LXR_DATA_DIR=/srv/elixir-data/musl/data \
-    elixir-container python3 -m utils.query ident latest malloc C
+ # docker exec elixir-container \
+    elixir -C /srv/elixir-data query musl ident latest malloc C
 
 NOTE: `latest` can be replaced with any other tag, and `malloc` with any
 other identifier.
@@ -154,7 +153,7 @@ data-dir rotation logic:
 open read-only.
 . A separate indexing container (or a one-off `docker run --entrypoint
 index ...`) updates its own copy of the project's `data/` directory;
-`update.py` leaves one clean, checkpointed `data.duckdb` (no WAL, no
+the updater leaves one clean, checkpointed `data.duckdb` (no WAL, no
 scratch files) when it finishes.
 . Rotation is an ops concern: copy the fresh file over the served copy
 and restart/reload the serving containers. A half-copied file is
@@ -167,12 +166,13 @@ All cross-reference data of a project is one DuckDB database,
 layer):
 
 * `blobs`, `versions` and `idents` are small dimension tables with a
-PRIMARY KEY; their integer ids are dense counters assigned by
-`update.py` in deterministic walk order (no sequences). `idents`
-additionally carries an ART index on `name` — the query hot path.
+PRIMARY KEY; their integer ids are dense counters assigned by the
+updater (`elixir/update.py`) in deterministic walk order (no
+sequences). `idents` additionally carries an ART index on `name` — the
+query hot path.
 * `version_objects`, `defs`, `refs` and `docs` are fact tables with no
 constraints and no indexes: their access path is physical clustering.
-`update.py` writes them through staging twins (`<table>_stage`, hidden
+The updater writes them through staging twins (`<table>_stage`, hidden
 from readers by the `<table>_all` views) and rebuilds each main table
 ordered by its cluster key (leading `identid`) at the end of the run,
 so ident lookups scan one contiguous range.
@@ -185,7 +185,7 @@ Determinism is a property, and it is checked: the logical content of
 a database is a deterministic function of the input walk, so two
 fresh indexes of the same repository hash identically under
 `data_duckdb.canonical_dump()` (a byte-stable dump of every table in
-key order). `update.py` verifies `check_invariants()` (dense ids,
+key order). `update.py` checks `check_invariants()` (dense ids,
 referential integrity, refs only for defined idents, the per-ident
 definition-family bitmasks) after every run and fails loudly instead
 of publishing a broken database.
@@ -265,8 +265,8 @@ Both must pass clean:
 
 ----
 python3 -m pip install -r requirements-dev.txt
-ruff check elixir update.py find_compatible_dts.py wsgi.py t utils
-vulture elixir update.py find_compatible_dts.py wsgi.py t utils \
+ruff check elixir wsgi.py t utils
+vulture elixir wsgi.py t utils \
     t/lint_vulture_whitelist.py
 ----
 

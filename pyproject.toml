@@ -64,8 +64,6 @@ ignore = [
 # The harness scripts set up sys.path before they can import the tree
 "t/equiv/*.py" = ["E402"]
 "t/*" = ["E402"]
-# update.py: module docstring and cross-phase helpers sit above late imports
-"update.py" = ["E402"]
 # vulture whitelist: bare names are vulture's documented whitelist
 # style - undefined on purpose, read by vulture as references
 "t/lint_vulture_whitelist.py" = ["B018", "F821"]
