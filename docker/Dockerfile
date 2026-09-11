@@ -5,13 +5,7 @@ RUN \
   apt-get --no-install-recommends -y install \
     git build-essential pkg-config autoconf automake \
     python3 python3-pip python3-dev python3-docutils \
-    libdb-dev \
     libseccomp-dev libjansson-dev libyaml-dev libxml2-dev
-
-WORKDIR /build-berkeleydb/
-
-# NOTE wheel version MUST be sycnhronized with requirements.txt
-RUN pip wheel berkeleydb==18.1.10
 
 WORKDIR /build-ctags/
 
@@ -27,7 +21,6 @@ RUN \
     python3 \
     python3-pip \
     python3-venv \
-    libdb5.3 \
     git \
     apache2 \
     libapache2-mod-wsgi-py3 \
@@ -39,11 +32,8 @@ COPY ./requirements.txt /usr/local/elixir/
 
 WORKDIR /usr/local/elixir/
 
-COPY --from=build /build-berkeleydb/berkeleydb-*.whl /tmp/build/
-
 RUN python3 -m venv venv && \
     . ./venv/bin/activate && \
-    pip install /tmp/build/berkeleydb-*.whl && \
     pip install -r requirements.txt
 
 COPY --from=build /build-ctags/ctags/ctags /usr/bin/ctags

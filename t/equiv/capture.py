@@ -25,11 +25,11 @@
 Writes <out>/responses.jsonl.{zst,gz} plus meta.json with the full
 provenance: elixir commit, ELIXIR_VERSION pin, project repo HEAD +
 tags hash, the data-dir canonical dump md5 (recomputed read-only with
-utils/dump.py), dependency versions, wall time.
+data_duckdb.canonical_dump), dependency versions, wall time.
 
 Parallel capture: --workers N spawns N processes, each with its own
-app and read-only BDB handles (concurrent readers are fine, measured).
-Records always land in the file in manifest order.
+app and read-only database connection (concurrent readers are fine,
+measured). Records always land in the file in manifest order.
 
 Run under the tree whose behavior you want to freeze; the old side is
 the pinned worktree of the pre-migration commit (R3B §2).
@@ -47,7 +47,7 @@ from t.equiv import common  # noqa: E402
 
 
 def worker(chunk, proj_dir, part_path):
-    """One process: own client, own read-only BDB handles"""
+    """One process: own client, own read-only database connection"""
     client = common.make_client(proj_dir)
     w, _kind = common.open_writer(part_path)
     try:

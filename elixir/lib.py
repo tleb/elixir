@@ -182,13 +182,6 @@ def isIdent(bstr):
     else:
         return True
 
-def autoBytes(arg):
-    if type(arg) is str:
-        arg = arg.encode()
-    elif type(arg) is int:
-        arg = str(arg).encode()
-    return arg
-
 def getDataDir():
     try:
         return os.environ['LXR_DATA_DIR']
@@ -208,10 +201,6 @@ def currentProject():
 
 # List all families supported by Elixir
 families = ['A', 'B', 'C', 'D', 'K', 'M']
-
-# Those families have databases that cache the content of definitions.db.
-# This allows faster lookup.
-CACHED_DEFINITIONS_FAMILIES = ['C', 'K', 'D', 'M']
 
 def validFamily(family):
     return family in families

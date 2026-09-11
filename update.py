@@ -99,7 +99,6 @@ from elixir import repo
 from elixir import parse
 import elixir.lib as lib
 from elixir import data_duckdb as dd
-from elixir.data import defTypeR
 from elixir.project_utils import get_lexer
 from find_compatible_dts import FindCompatibleDTS
 
@@ -307,6 +306,23 @@ def write_chunk(path, schema, rows):
 # Both filters apply where defs rows and identids are minted; the
 # UNfiltered scratch still feeds the def-line map, which — like the
 # defs_idxes dict it ports — records every ctags line regardless.
+# ctags' one-letter type codes -> the stored deftype names.
+defTypeR = {
+    'c': 'config',
+    'd': 'define',
+    'e': 'enum',
+    'E': 'enumerator',
+    'f': 'function',
+    'l': 'label',
+    'M': 'macro',
+    'm': 'member',
+    'p': 'prototype',
+    's': 'struct',
+    't': 'typedef',
+    'u': 'union',
+    'v': 'variable',
+    'x': 'externvar'}
+
 valid_deftypes = tuple(defTypeR.values())
 deftype_list = ', '.join("'%s'" % t for t in valid_deftypes)
 ident_blacklist = [name.decode() for name in lib.blacklist]
@@ -734,8 +750,7 @@ def ingest_comps_docs(files):
 
 def update_ident_fams():
     '''idents.def_fams/macro_fams, OR-accumulated from this tag's def
-    rows only (ctags and compatibles both): the bitmask replaces the
-    DefList families blob and the four defs_cache databases'''
+    rows only (ctags and compatibles both)'''
     sources = ['SELECT i.identid AS identid, m.deftype AS deftype, m.family AS family '
                'FROM tag_defs_mapped m JOIN idents i ON i.name = m.name']
     if dts_comp_support:

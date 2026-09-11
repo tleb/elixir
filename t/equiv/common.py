@@ -265,38 +265,36 @@ def iter_records(outdir):
 
 def versions_info():
     import platform
+    import duckdb
     import falcon
     import jinja2
     import pygments
 
-    info = {
+    return {
         'python': platform.python_version(),
+        'duckdb': duckdb.__version__,
         'falcon': falcon.__version__,
         'jinja2': jinja2.__version__,
         'pygments': pygments.__version__,
     }
-    try:
-        import berkeleydb
-        info['berkeleydb'] = berkeleydb.__version__
-    except ImportError:
-        try:
-            import duckdb
-            info['duckdb'] = duckdb.__version__
-        except ImportError:
-            pass
-    return info
 
 
 def data_dir_dump_md5(data_dir):
-    """BDB data-dir provenance: canonical utils/dump.py | md5sum,
-    read-only (R3B §5). None for non-BDB (DuckDB) sides."""
-    if not os.path.exists(os.path.join(data_dir, 'versions.db')):
+    """Data-dir provenance: md5 of the DuckDB canonical dump
+    (data_duckdb.canonical_dump, read-only).  None when the dir holds
+    no data.duckdb (pre-cutover BDB dirs keep the md5 they recorded
+    with the old utils/dump.py, which no longer exists)."""
+    db_path = os.path.join(data_dir, 'data.duckdb')
+    if not os.path.exists(db_path):
         return None
-    env = dict(os.environ, LXR_DATA_DIR=data_dir)
-    dump = subprocess.run([sys.executable, os.path.join(REPO_ROOT, 'utils', 'dump.py')],
-                          env=env, cwd=REPO_ROOT,
-                          stdout=subprocess.PIPE, check=True)
-    return hashlib.md5(dump.stdout).hexdigest()
+    from elixir import data_duckdb
+    conn = data_duckdb.connect_ro(db_path)
+    try:
+        buf = io.BytesIO()
+        data_duckdb.canonical_dump(conn, buf)
+    finally:
+        conn.close()
+    return hashlib.md5(buf.getvalue()).hexdigest()
 
 
 def repo_provenance(repo_dir):
@@ -334,10 +332,13 @@ def read_meta(outdir):
 def check_versions_match(meta):
     """Replay refuses to run if dep versions differ from meta: the
     Pygments/Jinja/falcon output is part of the surface, both sides
-    must come from the same venv (R3B §2)"""
+    must come from the same venv (R3B §2).
+    Only keys the current tree still produces are compared: pre-cutover
+    captures recorded the old storage engine's version, an engine the
+    tree no longer ships — replaying them exercises DuckDB either way."""
     current = versions_info()
     recorded = meta.get('versions', {})
     drift = {k: (recorded.get(k), current.get(k))
-             for k in ('python', 'falcon', 'jinja2', 'pygments', 'berkeleydb', 'duckdb')
+             for k in current
              if k in recorded and recorded.get(k) != current.get(k)}
     return drift

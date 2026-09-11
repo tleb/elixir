@@ -137,10 +137,11 @@ class Query:
 
         return path.strip('/') in self.file_cache[version]
 
-    # The defs_cache-* membership of the BDB layer: which idents have a
-    # definition compatible with a file family (generate_defs_caches
-    # applied lib.compatibleFamily/compatibleMacro to db.defs records).
-    # Compatibles never qualified (they lived in db.comps, not db.defs).
+    # Which idents have a definition compatible with a file family —
+    # the generate_defs_caches semantics: lib.compatibleFamily /
+    # compatibleMacro applied to real definitions (compatibles never
+    # qualified; they are not definitions). Frozen behavior, pinned by
+    # the equiv captures.
     _DEFS_CACHE_SQL = {
         'C': "d.family IN ('C', 'K')",
         'K': "d.family = 'K'",
@@ -149,12 +150,9 @@ class Query:
     }
 
     def _marks_for(self, family, words):
-        # The defs_cache-* membership of the BDB layer, restricted to
-        # one file's tokens: which of `words` have a definition
-        # compatible with the file family (generate_defs_caches
-        # applied lib.compatibleFamily/compatibleMacro to db.defs
-        # records).  Compatibles never qualified (they lived in
-        # db.comps, not db.defs).  Asking per file beats materializing
+        # Which of `words` have a definition compatible with the file
+        # family (the generate_defs_caches semantics; compatibles never
+        # qualified).  Asking per file beats materializing
         # the whole family's name set per Query.  The words travel as
         # one chr(1)-joined string: a Python list parameter converts
         # at ~0.07 ms per element (duckdb 1.5.5 client), which would

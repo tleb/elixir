@@ -3,11 +3,7 @@ Pygments~=2.18.0
 Falcon~=4.0.2
 pytest==7.2.1
 
-# NOTE binary wheels of berkeleydb are not distributed - on Debian this may
-# require installing build-essentials, python3-dev and libdb-dev
-# NOTE keep in sync with wheel version in the Dockerfile
-berkeleydb==18.1.10
-# DuckDB new-side storage layer (elixir/data_duckdb.py); file format is not
+# DuckDB storage layer (elixir/data_duckdb.py); file format is not
 # stable across releases, keep pinned
 # NOTE keep in sync with wheel version in the Dockerfile
 duckdb==1.5.5
