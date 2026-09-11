@@ -7,3 +7,8 @@ pytest==7.2.1
 # require installing build-essentials, python3-dev and libdb-dev
 # NOTE keep in sync with wheel version in the Dockerfile
 berkeleydb==18.1.10
+# DuckDB new-side storage layer (elixir/data_duckdb.py); file format is not
+# stable across releases, keep pinned
+# NOTE keep in sync with wheel version in the Dockerfile
+duckdb==1.5.5
+pyarrow==25.0.1
