@@ -67,6 +67,9 @@ ignore = [
 # vulture whitelist: bare names are vulture's documented whitelist
 # style - undefined on purpose, read by vulture as references
 "t/lint_vulture_whitelist.py" = ["B018", "F821"]
+# wsgi.py: mod_wsgi entry point, `application` is loaded by Apache's
+# WSGIScriptAliasMatch, never called from Python
+"wsgi.py" = ["F401"]
 # Lexer test inputs embed significant trailing whitespace and
 # whitespace-only lines: raw lexing data, not formatting
 "elixir/lexers/tests/test_c.py" = ["W291"]

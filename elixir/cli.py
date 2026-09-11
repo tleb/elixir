@@ -154,8 +154,46 @@ def register_remote(subparsers):
     subparser.add_argument('url', help="The remote's fetch URL")
     subparser.set_defaults(handler=run_remote_add)
 
+# --- serve: development server for elixir.web ---
+
+def make_lxr_app(proj_dir):
+    """Wrap elixir.web.application in a WSGI app that injects
+    LXR_PROJ_DIR=proj_dir into every request's environ -- what Apache's
+    SetEnv does for mod_wsgi (see docker/000-default.conf)."""
+    from elixir.web import application  # deferred: pulls falcon & jinja2
+
+    def wsgi_app(environ, start_response):
+        environ['LXR_PROJ_DIR'] = proj_dir
+        return application(environ, start_response)
+
+    return wsgi_app
+
+def run_serve(args):
+    from wsgiref.simple_server import make_server
+
+    proj_dir = os.getcwd()
+    httpd = make_server(args.host, args.port, make_lxr_app(proj_dir))
+    print(f"Serving http://{args.host}:{httpd.server_port} "
+          f"(projects under {proj_dir})", flush=True)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print()  # newline after the terminal's ^C
+    finally:
+        httpd.server_close()
+
+def register_serve(subparsers):
+    parser = subparsers.add_parser('serve', help="Serve the web interface "
+                                    "(development server)")
+    parser.add_argument('--host', default='127.0.0.1',
+                        help="Interface to bind (default: %(default)s)")
+    parser.add_argument('--port', type=int, default=8000,
+                        help="Port to bind (default: %(default)s)")
+    parser.set_defaults(handler=run_serve)
+
 # Subcommand registry; later tasks append serve
-subcommands = [register_query, register_update, register_index, register_remote]
+subcommands = [register_query, register_update, register_index, register_remote,
+               register_serve]
 
 def main(argv=None):
     parser = argparse.ArgumentParser(

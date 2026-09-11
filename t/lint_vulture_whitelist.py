@@ -1,7 +1,7 @@
 # Vulture whitelist: names vulture cannot see being used.
 #
 # Run from the repo root:
-#   vulture elixir wsgi.py t utils t/lint_vulture_whitelist.py
+#   vulture elixir wsgi.py t t/lint_vulture_whitelist.py
 #
 # Every entry here is either a framework hook (called by falcon or the
 # lexer machinery, not by us) or a deliberately-kept URL-shape
@@ -20,7 +20,8 @@ media
 downloadable_as
 cache_control
 
-# the WSGI entry point (imported by the server)
+# mod_wsgi entry point: wsgi.py exposes it for WSGIScriptAliasMatch
+# (deployment glue, uncalled from Python)
 application
 
 # pygments lexer option (assigned on the lexer object)
