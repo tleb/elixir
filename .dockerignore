@@ -1,16 +1,21 @@
-# Generated files
+# Host-side Python/uv artifacts — never copy into the image
 **/__pycache__
-tags
+**/*.py[cod]
+.venv/
+venv/
+env
+**/*.egg-info/
+.pytest_cache/
+.ruff_cache/
 /.cache/
 .idea/
-env
-venv/
-.venv/
-**/*.py[cod]
 
+# Indexed data and git repositories — bind-mounted, not baked in
 **/*.db
 **/repo
 **/data
+
+tags
 
 .git
 .gitignore

@@ -23,10 +23,23 @@ toc::[]
 = Requirements
 
 * Git (to clone this repository)
-* Docker (or a compatible container runtime)
+* Docker (or a compatible container runtime), or
+  https://docs.astral.sh/uv/[uv] to run Elixir directly on a host
 
 All other dependencies (Python 3 and its libraries, DuckDB,
 Universal Ctags, Apache) are bundled in the Docker image.
+
+On a host, `uv` takes care of everything Python-side, including a
+suitable interpreter if the host has none:
+
+ # git clone https://github.com/bootlin/elixir.git ./elixir
+ # cd ./elixir
+ # uv sync
+ # uv run elixir --help
+
+Every command below that starts with `uv run` works from this setup.
+Inside the Docker container the same commands run without the `uv run`
+prefix.
 
 Running the test suite on a host has additional requirements, see the
 _Automated testing_ section.
@@ -80,29 +93,46 @@ of the host.
 == Index a project
 
 The Docker image does not contain any repositories.
-To index a repository, you can use the `index` script.
-For example, to add the https://musl.libc.org/[musl] repository, run:
+To index a repository, you can use the `elixir index` command, with `-C`
+pointing at the data root. For example, to add the
+https://musl.libc.org/[musl] repository, run:
 
- # docker exec -it elixir-container index /srv/elixir-data musl
+ # docker exec -it elixir-container \
+    elixir -C /srv/elixir-data index musl
 
 Or, to run indexing in a separate container:
 
  # docker run -v ./elixir-data/:/srv/elixir-data \
-    --entrypoint index elixir /srv/elixir-data musl
+    --entrypoint elixir elixir -C /srv/elixir-data index musl
 
-You can also use `index /srv/elixir-data --all` to start indexing all officially supported repositories.
+`index --all` indexes every project already present under the data
+root:
 
-The `index` command fetches the project's remotes (creating the bare
-repository on first run) and then runs the updater (`elixir update`) to
-build the databases. Run it again at any time to index newly released
-versions.
+ # docker exec -it elixir-container \
+    elixir -C /srv/elixir-data index --all
+
+The `index` command creates the project layout (bare repository under
+`repo/`, database under `data/`), automatically adds the default
+remotes of officially supported projects, fetches them, and then
+runs the updater (`elixir update`) to build the databases. Run it again
+at any time to index newly released versions.
+
+Custom remotes (mirrors, vendor trees...) are added with
+`elixir remote add`, before or after the first `index` run:
+
+ # docker exec -it elixir-container \
+    elixir -C /srv/elixir-data remote add musl https://example.com/musl-mirror.git
+
+`update` alone indexes the new tags of projects that already exist
+under the data root: it does not bootstrap a project from a remote,
+that is what `index` is for.
 
 The updater uses every CPU on the system; there is no thread-count knob.
 `$ELIXIR_DDB_MEM` overrides DuckDB's ingest memory budget (by default a
 quarter of the RAM, so the indexing pool keeps room beside it).
 
 Tags are indexed one at a time, the oldest first, in one transaction per
-tag, and `utils/index` runs an update after each fetch.
+tag, and `elixir index` runs an update after each fetch.
 
 ____
 Generating the full database can take a long time: it takes about 15 hours on a Xeon E3-1245 v5 to index 1800 tags in the Linux kernel. Progress is committed after each tag, so you can interrupt indexing and run it again later to continue where it stopped. You can even create a new Git repository and just create one tag instead of using the official kernel repository which is very large.
@@ -128,7 +158,7 @@ the container.
 == Automatic repository updates
 
 The Docker image does not automatically update repositories by itself.
-You can, for example, start `index /srv/elixir-data --all` in the container (or in a separate container, with Elixir data volume/directory mounted)
+You can, for example, start `elixir -C /srv/elixir-data index --all` in the container (or in a separate container, with Elixir data volume/directory mounted)
 from cron on the host to periodically update repositories and index new
 releases.
 
@@ -141,6 +171,16 @@ Changes in the code made on the host should be automatically reflected in the co
 You can use `apache2ctl` to restart Apache.
 Error logs are available in `/var/log/apache2/error.log` within the container.
 
+== Development server on the host
+
+On a host, the `serve` subcommand runs the same web application through
+Python's built-in WSGI server, no Apache needed:
+
+ # uv run elixir -C ../elixir-data serve
+
+It binds to `127.0.0.1:8000` by default; `--host` and `--port` change
+that.
+
 == Updating a live deployment without downtime
 
 DuckDB's lock model allows exactly one read-write opener (the indexer)
@@ -152,7 +192,7 @@ data-dir rotation logic:
 . The web/API containers serve from a copy of `data.duckdb` they only
 open read-only.
 . A separate indexing container (or a one-off `docker run --entrypoint
-index ...`) updates its own copy of the project's `data/` directory;
+elixir ...`) updates its own copy of the project's `data/` directory;
 the updater leaves one clean, checkpointed `data.duckdb` (no WAL, no
 scratch files) when it finishes.
 . Rotation is an ops concern: copy the fresh file over the served copy
@@ -185,7 +225,7 @@ Determinism is a property, and it is checked: the logical content of
 a database is a deterministic function of the input walk, so two
 fresh indexes of the same repository hash identically under
 `data_duckdb.canonical_dump()` (a byte-stable dump of every table in
-key order). `update.py` checks `check_invariants()` (dense ids,
+key order). `elixir/update.py` checks `check_invariants()` (dense ids,
 referential integrity, refs only for defined idents, the per-ident
 definition-family bitmasks) after every run and fails loudly instead
 of publishing a broken database.
@@ -194,8 +234,8 @@ of publishing a broken database.
 ====
 The DuckDB file format is not stable across releases: a
 `data.duckdb` written by one version of DuckDB may not open under
-another. Keep `duckdb` and `pyarrow` pinned exactly (as
-`requirements.txt` does, in sync with the Docker image) and expect a
+another. Keep `duckdb` and `pyarrow` pinned exactly (they are, in
+`uv.lock`, in sync with the Docker image) and expect a
 full re-index when upgrading them.
 ====
 
@@ -264,10 +304,8 @@ and methods — `t/lint_vulture_whitelist.py` covers framework hooks).
 Both must pass clean:
 
 ----
-python3 -m pip install -r requirements-dev.txt
-ruff check elixir wsgi.py t utils
-vulture elixir wsgi.py t utils \
-    t/lint_vulture_whitelist.py
+uv run ruff check elixir wsgi.py t
+uv run vulture elixir wsgi.py t t/lint_vulture_whitelist.py
 ----
 
 == How to send patches
@@ -287,13 +325,16 @@ was built as shown earlier):
 
  # docker run --rm --entrypoint pytest elixir t/
 
+The image's `PATH` includes the virtual environment, so `pytest` resolves
+there.
+
 == On the host
 
-Running the suite on a host requires: Git, Python >= 3.8 with the
-packages listed in `requirements.txt`, and Universal Ctags.
-From the top-level Elixir directory, run:
+Running the suite on a host requires: Git, Python >= 3.10, `uv`, and
+Universal Ctags. From the top-level Elixir directory, run:
 
- python3 -m pytest t/
+ # uv sync
+ # uv run pytest t/
 
 The test suite uses code extracted from Linux v5.4 and Linux v7.3-rc2 in
 `t/tree`.  The v7.3-rc2 files (the `omap2420-n8x0*` devicetrees, the

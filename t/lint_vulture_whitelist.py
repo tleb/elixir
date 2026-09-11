@@ -1,7 +1,8 @@
 # Vulture whitelist: names vulture cannot see being used.
 #
 # Run from the repo root:
-#   vulture elixir wsgi.py t t/lint_vulture_whitelist.py
+#   uv run vulture elixir wsgi.py t t/lint_vulture_whitelist.py
+#   uv run ruff check elixir wsgi.py t
 #
 # Every entry here is either a framework hook (called by falcon or the
 # lexer machinery, not by us) or a deliberately-kept URL-shape

@@ -11,8 +11,7 @@ dependencies = [
     "jinja2~=3.1.5",
     "pygments~=2.18.0",
     # DuckDB storage layer (elixir/data_duckdb.py); file format is not
-    # stable across releases, keep pinned
-    # NOTE keep in sync with wheel version in the Dockerfile
+    # stable across releases, keep pinned (exact pins in uv.lock)
     "duckdb~=1.5.5",
     "pyarrow~=25.0.1",
 ]

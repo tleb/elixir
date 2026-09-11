@@ -1,5 +1,15 @@
 = Elixir Changelog
 
+== Unreleased - Packaging rework
+
+* Dependencies are now managed with https://docs.astral.sh/uv/[uv]
+(`pyproject.toml` + `uv.lock`); the `requirements*.txt` files are gone.
+* Everything now goes through a single `elixir` console command with
+subcommands: `query`, `update`, `index` (with `--all`), `remote add` and
+`serve` replace `utils/query.py`, `utils/index`, `update.py` and the
+old per-script env vars (projects are addressed with `-C <data root>`).
+* The Docker image builds its Python environment with uv.
+
 == 2024-08 - WSGI update
 
 * Migrated Elixir from a CGI-based architecture to a WSGI-based architecture. This should improve performance.
