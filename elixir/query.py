@@ -65,6 +65,16 @@ class SymbolInstance(object):
 # Returns a Query class instance or None if project data directory does not exist
 # basedir: absolute path to parent directory of all project data directories, ex: "/srv/elixir-data/"
 # project: name of the project, directory in basedir, ex. "linux"
+#
+# Instances are cached per process: opening the database is real work
+# (instance, catalog, buffer manager), and one request in ~60 ms of
+# which the open was a solid slice — 154k replay requests against
+# musl-B made that the run's dominant cost. web/api serve read-only
+# copies, so a connection lives as long as the process; a data.duckdb
+# rotated in by ops is only picked up after a restart, which the A/B
+# deployment model already requires.
+_query_cache = {}
+
 def get_query(basedir, project):
     datadir = basedir + '/' + project + '/data'
     repodir = basedir + '/' + project + '/repo'
@@ -72,7 +82,13 @@ def get_query(basedir, project):
     if not os.path.exists(datadir) or not os.path.exists(repodir):
         return None
 
-    return Query(datadir, repodir)
+    key = (basedir, project)
+    query = _query_cache.get(key)
+    if query is None:
+        query = Query(datadir, repodir)
+        query._shared = True # close() becomes a no-op: cache owns it
+        _query_cache[key] = query
+    return query
 
 class Query:
     def __init__(self, data_dir, repo_dir):
@@ -86,9 +102,11 @@ class Query:
         self.file_cache = {}
         self._tag_cache = {}       # tag -> versionid or None
         self._tags = None          # set of the database's tags
+        self._shared = False       # set by get_query: the cache owns this
 
     def close(self):
-        self.db.close()
+        if not self._shared:
+            self.db.close()
 
     def _tags_in_db(self):
         if self._tags is None:

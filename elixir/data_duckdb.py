@@ -209,10 +209,16 @@ def connect_rw(path, threads=2, memory_limit='512MB'):
     init(conn)
     return conn
 
-def connect_ro(path):
+def connect_ro(path, threads=1):
     """Open an existing database read-only.  Fails with duckdb.IOException
-    if the file is missing or held read-write by another process."""
-    return duckdb.connect(str(path), read_only=True)
+    if the file is missing or held read-write by another process.
+
+    Serving is point queries; DuckDB's default thread count (one per
+    core) only adds orchestration overhead per query and multiplies
+    the process count into a load storm under concurrency."""
+    conn = duckdb.connect(str(path), read_only=True)
+    conn.execute(f'SET threads={int(threads)}')
+    return conn
 
 def init(conn):
     """Create the schema (idempotent) on a read-write connection: tables,
