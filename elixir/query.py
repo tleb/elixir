@@ -148,6 +148,10 @@ class Query:
         'D': "(d.family = 'D' OR (d.family = 'C' AND d.deftype = 'macro'))",
         'M': "d.family = 'K'",
     }
+    # DefList.iter only ever yielded known-deftype rows, so only those
+    # may display or mark (ghost rows exist for acp/symbol_exists)
+    _KNOWN_DEFTYPES = "d.deftype IN (%s)" % ', '.join(
+        "'%s'" % t for t in dd.VALID_DEFTYPES)
 
     def _marks_for(self, family, words):
         # Which of `words` have a definition compatible with the file
@@ -163,6 +167,7 @@ class Query:
             'SELECT DISTINCT i.name FROM idents i JOIN defs d'
             ' ON d.identid = i.identid'
             " WHERE d.deftype <> 'compatible' AND "
+            + self._KNOWN_DEFTYPES + ' AND '
             + self._DEFS_CACHE_SQL[family]
             + " AND i.name IN (SELECT unnest(string_split(?, chr(1))))",
             ['\x01'.join(sorted(words))]).fetchall()
@@ -280,13 +285,13 @@ class Query:
     # against the helper's (file_family, requested_family) signature —
     # so the effective test is: any item of the REF family's
     # compatibility list is a substring of the QUERY family char
-    # (frozen upstream behavior):
-    #   C query: C and K refs   K query: C, K and M refs
+    # (frozen upstream behavior, verified by executing the old code):
+    #   C query: C refs only    K query: C, K and M refs
     #   D query: D refs         M query: no refs at all ('M' is in no
     #                            compatibility list)
     _REF_FAMS = {
         'A': None,                       # no filter
-        'C': "r.family IN ('C', 'K')",
+        'C': "r.family = 'C'",
         'K': "r.family IN ('C', 'K', 'M')",
         'D': "r.family = 'D'",
         'M': 'FALSE',
@@ -427,6 +432,7 @@ class Query:
             '   WHERE versionid = ? GROUP BY blobid'
             ' ) vo ON vo.blobid = d.blobid'
             ' WHERE d.identid = ? AND d.deftype <> \'compatible\''
+            '   AND ' + self._KNOWN_DEFTYPES +
             '   AND ' + def_cond +
             ' ORDER BY d.deftype DESC, vo.filepath, d.defline',
             [versionid, identid] + def_params).fetchall()
