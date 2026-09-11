@@ -42,7 +42,9 @@ import difflib
 import hashlib
 import json
 import os
+import shutil
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -91,7 +93,58 @@ def describe_diff(entry, expected, got):
     return d
 
 
-def run_replay(manifest_path, captures, proj_dir, max_diffs=20, report_path=None):
+def _worker_fetch(chunk, proj_dir, part_path):
+    """One replay worker process: own client, own fetches, compressed
+    part file (capture.py's worker shape)"""
+    client = common.make_client(proj_dir)
+    w, _kind = common.open_writer(part_path)
+    try:
+        for entry in chunk:
+            w.write((json.dumps(common.fetch(client, entry),
+                                separators=(',', ':')) + '\n').encode())
+    finally:
+        w.close()
+
+
+def _as_compressed(path):
+    kind = common.compression_kind() or 'gzip'
+    return path + ('.zst' if kind == 'zstd' else '.gz')
+
+
+def _fetch_all(entries_by_id, proj_dir, part_root, workers):
+    """Fetch every manifest entry and return {i: record}. workers > 1
+    forks N processes sharded round-robin (each with its own client)
+    and re-interleaves the parts in manifest order, like capture.py"""
+    ordered = [entries_by_id[i] for i in sorted(entries_by_id)]
+    if workers <= 1:
+        client = common.make_client(proj_dir)
+        return {e['i']: common.fetch(client, e) for e in ordered}
+
+    import multiprocessing as mp
+    ctx = mp.get_context('fork')  # cheap; the client is built per child
+    chunks = [ordered[i::workers] for i in range(workers)]
+    procs = []
+    for n, chunk in enumerate(chunks):
+        p = ctx.Process(target=_worker_fetch, args=(chunk, proj_dir, f'{part_root}.part{n}'))
+        p.start()
+        procs.append(p)
+    for p in procs:
+        p.join()
+    rc = [p.exitcode for p in procs]
+    if any(r != 0 for r in rc):
+        raise SystemExit(f'replay workers failed: {rc}')
+
+    records = {}
+    for n, chunk in enumerate(chunks):
+        part = _as_compressed(f'{part_root}.part{n}')
+        for e, rec in zip(chunk, common.iter_records_file(part)):
+            records[e['i']] = rec
+        os.remove(part)
+    return records
+
+
+def run_replay(manifest_path, captures, proj_dir, max_diffs=20, report_path=None,
+               workers=1):
     if not os.path.isdir(captures) or not os.path.exists(os.path.join(captures, 'meta.json')):
         raise SystemExit(f'no frozen captures in {captures} — capture them from the '
                          'pinned old side first (the linux2tag ones are T-E2\'s, '
@@ -112,14 +165,24 @@ def run_replay(manifest_path, captures, proj_dir, max_diffs=20, report_path=None
     entries = {e['i']: e for e in common.read_manifest(manifest_path)}
     divergences = load_divergences(sha)
 
-    client = common.make_client(proj_dir)
     strata = {}
     diffs = []
     n = 0
     t0 = time.monotonic()
+
+    # Fetch every record (possibly through N worker processes, each
+    # with its own client, sharded round-robin and re-interleaved in
+    # manifest order like capture.py does), then compare
+    fetch_dir = tempfile.mkdtemp(prefix='equiv-replay-')
+    try:
+        ordered = _fetch_all(entries, proj_dir,
+                             os.path.join(fetch_dir, 'fetch.jsonl'), workers)
+    finally:
+        shutil.rmtree(fetch_dir, ignore_errors=True)
+
     for rec in common.iter_records(captures):
         entry = entries[rec['i']]
-        got = common.fetch(client, entry)
+        got = ordered[rec['i']]
         div = divergences.get(entry['i'])
         if div and 'expected_status' in div:
             got = {**got, 's': div['expected_status']}
@@ -169,6 +232,9 @@ def main():
     ap.add_argument('--proj-dir', required=True,
                     help='LXR_PROJ_DIR of the side under test')
     ap.add_argument('--max-diffs', type=int, default=20)
+    ap.add_argument('--workers', type=int, default=1,
+                    help='N parallel fetch processes (each with its own '
+                         'client), for the big Tier-B manifests')
     ap.add_argument('--report', help='report.json path '
                     '(default <captures>/report.json)')
     ap.add_argument('--bless', action='store_true',
@@ -190,7 +256,8 @@ def main():
     report = run_replay(args.manifest, args.captures, args.proj_dir,
                         max_diffs=args.max_diffs,
                         report_path=args.report
-                        or os.path.join(args.captures, 'report.json'))
+                        or os.path.join(args.captures, 'report.json'),
+                        workers=args.workers)
     return 1 if report['diffs'] else 0
 
 

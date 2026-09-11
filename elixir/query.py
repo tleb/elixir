@@ -266,15 +266,16 @@ class Query:
     # The families of ref rows a family query shows. The old call was
     # lib.compatibleFamily(family, ref_family) — arguments swapped
     # against the helper's (file_family, requested_family) signature —
-    # so the effective test is: the QUERY family in the REF family's
-    # compatibility list (frozen upstream behavior):
-    #   C query: C and K refs   K query: K and M refs
+    # so the effective test is: any item of the REF family's
+    # compatibility list is a substring of the QUERY family char
+    # (frozen upstream behavior):
+    #   C query: C and K refs   K query: C, K and M refs
     #   D query: D refs         M query: no refs at all ('M' is in no
     #                            compatibility list)
     _REF_FAMS = {
         'A': None,                       # no filter
         'C': "r.family IN ('C', 'K')",
-        'K': "r.family IN ('K', 'M')",
+        'K': "r.family IN ('C', 'K', 'M')",
         'D': "r.family = 'D'",
         'M': 'FALSE',
     }
