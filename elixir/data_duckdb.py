@@ -69,6 +69,30 @@ FACT_TABLES = ('version_objects', 'defs', 'refs', 'docs')
 # Bitmask for idents.def_fams / macro_fams, per def family.
 FAM_BITS = {'C': 1, 'D': 2, 'K': 4, 'M': 8}
 
+# ctags' one-letter type codes -> the stored deftype names. Lives here
+# (not update.py) because the READ side needs the value set too: defs
+# rows with a deftype outside this map ARE ingested (the old world kept
+# the defs key with an empty DefList for them — 'ghost' keys, which acp
+# listed and symbol_exists answered True) but never display as
+# definitions and never contribute to def_fams.
+defTypeR = {
+    'c': 'config',
+    'd': 'define',
+    'e': 'enum',
+    'E': 'enumerator',
+    'f': 'function',
+    'l': 'label',
+    'M': 'macro',
+    'm': 'member',
+    'p': 'prototype',
+    's': 'struct',
+    't': 'typedef',
+    'u': 'union',
+    'v': 'variable',
+    'x': 'externvar'}
+
+VALID_DEFTYPES = tuple(defTypeR.values())
+
 # Cluster key (and canonical total order) per fact table.
 CLUSTER_ORDER = {
     'version_objects': 'versionid, blobid, filepath',
@@ -312,13 +336,17 @@ def check_invariants(conn):
         v.append(f'refs: {n} rows reference an ident with no defs')
 
     bits = ' '.join(f"WHEN '{f}' THEN {b}" for f, b in FAM_BITS.items())
+    known = ', '.join("'%s'" % t for t in VALID_DEFTYPES + ('compatible',))
+    # Only ghost rows (unknown deftype) are excluded: compatibles DO
+    # set family bits, ghosts carry none — like the empty DefLists the
+    # old world kept for them
     n = conn.execute(f"""
         WITH d AS (
             SELECT identid,
                    bit_or(CASE family {bits} END) AS def_fams,
                    coalesce(bit_or(CASE WHEN deftype = 'macro'
                                THEN CASE family {bits} END END), 0) AS macro_fams
-            FROM defs_all GROUP BY identid)
+            FROM defs_all WHERE deftype IN ({known}) GROUP BY identid)
         SELECT count(*) FROM idents i LEFT JOIN d USING (identid)
         WHERE i.def_fams IS DISTINCT FROM d.def_fams
            OR i.macro_fams IS DISTINCT FROM d.macro_fams""").fetchone()[0]
