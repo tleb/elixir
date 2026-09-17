@@ -83,7 +83,12 @@
 # a [HH:MM:SS] wall-clock timestamp; workers and pool processes never
 # print — they return their counters (lexer errors, captured ctags
 # stderr) inside their results and the parent aggregates them, so
-# parallel prints can no longer interleave mid-line. Progress inside a
+# parallel prints can no longer interleave mid-line. The per-tag recap
+# line attributes the tag's WHOLE wall: the five phase fields, then
+# the non-phase ops (blob-list read, transaction open, chunk
+# building, fams update, commit) and a residual other that must stay
+# near zero — a slow tag can hide no unexplained second. Progress
+# inside a
 # phase is driven by the parent's consumption of results, throttled to
 # one line per progress_min_interval; the run ends with a human summary
 # and one machine-parseable SUMMARY line (JSON) for post-hoc phase-time
@@ -167,6 +172,15 @@ def stall_timeout_s():
 # The phases of one tag, in execution order; the SUMMARY line always
 # carries all of them, 0.0 for the ones a project does not run
 phases = ('ids', 'vers', 'defs', 'docs', 'comps', 'refs', 'comps_docs')
+
+# The per-tag ops OUTSIDE the phases, each timed so the recap line
+# attributes a tag's whole wall: the tag's blob-list read from the
+# packed walk (list), the per-tag transaction open and its temp
+# tables (txn), the building of the phases' work units (chunks), the
+# ident fams update (fams) and the per-tag transaction commit
+# (commit). Recap: other = total − phases − these, so an unattributed
+# second shows up as a growing other
+tag_ops = ('list', 'txn', 'chunks', 'fams', 'commit')
 
 compatibles_parser = FindCompatibleDTS()
 
@@ -773,6 +787,8 @@ def run(repo_dir, data_dir, project=None):
     # Run-wide aggregates, written by the parent as it consumes results
     run_phase_s = dict.fromkeys(phases, 0.0)
     run_ingest_s = dict.fromkeys(phases, 0.0) # the SQL-ingest share of each phase
+    run_op_s = dict.fromkeys(tag_ops, 0.0) # the non-phase ops of each tag
+    run_other_s = 0.0 # the per-tag walls minus every attributed part
     lexer_errors = 0
     lexer_error_samples = [] # the first ERROR tokens, verbose mode only
     ctags_notices = 0
@@ -1166,24 +1182,30 @@ def run(repo_dir, data_dir, project=None):
             '''Index one tag inside its own transaction: every phase's
             inserts and the versions row commit together, so a tag is
             either fully in the database or not at all. Returns
-            (per-phase seconds, ingest seconds, new blob count).'''
+            (per-phase seconds, per-op seconds, tag wall seconds, new
+            blob count): the recap prints phases + ops + other, which
+            must sum to the wall.'''
             # Per-tag state, so each tag starts clean
             file_paths.clear()
             bindings_idxes.clear()
             new_hashes.clear()
             new_filenames.clear()
 
+            times = {}
+            ingest_times = {}
+            ops = {}
+            wall = time.monotonic()
+
             # One walk over the tag's blobs feeds every phase below:
             # read back from the upfront walk's packed file, same
             # triples in the same ls-tree order it captured
-            blobs = blob_lists.get(tag)
-
-            times = {}
-            ingest_times = {}
+            with PhaseTimer(ops, 'list', run_op_s):
+                blobs = blob_lists.get(tag)
 
             conn.execute('BEGIN TRANSACTION')
             try:
-                init_tag_tables()
+                with PhaseTimer(ops, 'txn', run_op_s):
+                    init_tag_tables()
 
                 # Phase 1: assign idx numbers to the tag's new blobs
                 with PhaseTimer(times, 'ids', run_phase_s):
@@ -1236,9 +1258,10 @@ def run(repo_dir, data_dir, project=None):
                 # (idx, filename, hash) triples in their items, with
                 # the project and dirs: spawned workers share nothing
                 # with the parent.
-                work = list(chunks(idxes))
-                triple_chunks = [[(idx, new_filenames[idx], new_hashes[idx])
-                                  for idx in chunk] for chunk in work]
+                with PhaseTimer(ops, 'chunks', run_op_s):
+                    work = list(chunks(idxes))
+                    triple_chunks = [[(idx, new_filenames[idx], new_hashes[idx])
+                                      for idx in chunk] for chunk in work]
 
                 with PhaseTimer(times, 'defs', run_phase_s):
                     pool_phase('defs', update_definitions, triple_chunks,
@@ -1256,13 +1279,15 @@ def run(repo_dir, data_dir, project=None):
                 # Family bitmasks for every ident this tag gave a def
                 # (the DefList families blob and the defs caches, as
                 # one column)
-                update_ident_fams()
+                with PhaseTimer(ops, 'fams', run_op_s):
+                    update_ident_fams()
 
                 # Phase 4: references (needs all definitions)
                 # The gate runs in SQL. Each worker process owns its
                 # own persistent cat-file --batch pipe.
-                refs_chunks = [[(idx, lib.decode(file_paths[idx]), new_hashes[idx])
-                                for idx in chunk] for chunk in work]
+                with PhaseTimer(ops, 'chunks', run_op_s):
+                    refs_chunks = [[(idx, lib.decode(file_paths[idx]), new_hashes[idx])
+                                    for idx in chunk] for chunk in work]
 
                 with PhaseTimer(times, 'refs', run_phase_s):
                     if refs_chunks:
@@ -1278,9 +1303,10 @@ def run(repo_dir, data_dir, project=None):
                     # iterated new-blob chunks filtered by
                     # bindings_idxes, and new_hashes/file_paths only
                     # carry new idxes
-                    bwork = list(chunks([i for i in bindings_idxes if i in new_hashes]))
-                    bchunks = [[(idx, file_paths[idx], new_hashes[idx])
-                                for idx in chunk] for chunk in bwork]
+                    with PhaseTimer(ops, 'chunks', run_op_s):
+                        bwork = list(chunks([i for i in bindings_idxes if i in new_hashes]))
+                        bchunks = [[(idx, file_paths[idx], new_hashes[idx])
+                                    for idx in chunk] for chunk in bwork]
 
                     with PhaseTimer(times, 'comps_docs', run_phase_s):
                         pool_phase('comps_docs', update_compatibles_bindings,
@@ -1289,32 +1315,45 @@ def run(repo_dir, data_dir, project=None):
                 # Commit the tag: only now is it visible. A crash
                 # before this point rolls the whole tag back; the next
                 # run re-indexes it.
-                conn.execute('COMMIT')
+                with PhaseTimer(ops, 'commit', run_op_s):
+                    conn.execute('COMMIT')
             except BaseException:
                 conn.execute('ROLLBACK')
                 raise
 
-            return times, ingest_times, len(idxes)
+            return times, ops, time.monotonic() - wall, len(idxes)
 
         done_tags = 0
         done_blobs = 0
 
         for tag_no, tag in enumerate(tag_buf, 1):
-            times, ingest_times, blobs = index_tag(tag, tag_no)
+            times, ops, tag_wall, blobs = index_tag(tag, tag_no)
             done_tags += 1
             done_blobs += blobs
 
-            # Tag completion line with per-phase seconds and, while
-            # tags remain, the run's remaining work: the upfront walk
-            # counted the new blobs, so "blobs left" is a fact and the
-            # ETA only carries the cumulative rate's noise, exact from
-            # the first tag on
-            msg = ('%s %s (%d/%d): %d blobs, %s (%s)'
+            # Tag completion line: every timed part of the tag's wall,
+            # so no second can hide. The five classic phase fields
+            # (defs docs comps refs comps_docs, in that order) come
+            # first unchanged for the scripts that grep them; the
+            # extension fields (the ids/vers phases, then the ops of
+            # tag_ops) follow, each omitted when it rounds to zero so
+            # small tags stay readable. total is the tag's wall and
+            # other = total − every printed part, always printed:
+            # what is left over is time the accounting missed
+            fields = [(p, times[p]) for p in
+                      ('defs', 'docs', 'comps', 'refs', 'comps_docs') if p in times]
+            # the extension parts: the ids/vers phases were never
+            # printed, then the non-phase ops — omitted at 0.0s
+            ext = {'ids': times['ids'], 'vers': times['vers'], **ops}
+            fields += [(p, t) for p, t in ext.items() if t >= 0.05]
+            accounted = sum(v for _, v in fields)
+            other = tag_wall - accounted
+            run_other_s += other
+            msg = ('%s %s (%d/%d): %d blobs, total %s (%s) other %s'
                    % (project, tag.decode(), done_tags, num_tags, blobs,
-                      fmt_secs(sum(times.values())),
-                      ' '.join('%s %s' % (p, fmt_secs(times[p]))
-                               for p in ('defs', 'docs', 'comps', 'refs', 'comps_docs')
-                               if p in times)))
+                      fmt_secs(tag_wall),
+                      ' '.join('%s %s' % (n, fmt_secs(v)) for n, v in fields),
+                      fmt_secs(other)))
             if done_tags < num_tags and done_blobs:
                 rate = done_blobs / (time.monotonic() - index_start)
                 left = total_new - done_blobs
@@ -1373,6 +1412,10 @@ def run(repo_dir, data_dir, project=None):
             '%s %s (%d%%)' % (p, fmt_secs(run_phase_s[p]),
                               round(run_phase_s[p] * 100 / phase_total) if phase_total else 0)
             for p in phases)))
+    log('%s: per-tag ops: %s, other %s'
+        % (project,
+           ' '.join('%s %s' % (o, fmt_secs(run_op_s[o])) for o in tag_ops),
+           fmt_secs(run_other_s)))
     log('%s: %d lexer errors, %d ctags notices'
         % (project, lexer_errors, ctags_notices))
 
@@ -1387,6 +1430,8 @@ def run(repo_dir, data_dir, project=None):
         'wall_s': round(wall, 3),
         'blobs_per_s': round(done_blobs / wall, 3) if done_blobs else 0,
         'phases': {p: round(run_phase_s[p], 3) for p in phases},
+        'tag_ops': {o: round(run_op_s[o], 3) for o in tag_ops if run_op_s[o]},
+        'other_s': round(run_other_s, 3),
         'ingest_s': {p: round(run_ingest_s[p], 3) for p in phases if run_ingest_s[p]},
         'recluster_s': round(recluster_s, 3),
         'lexer_errors': lexer_errors,

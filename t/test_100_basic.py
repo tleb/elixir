@@ -78,6 +78,13 @@ def update(env):
         text=True)
 
 
+def secs(field):
+    '''A fmt_secs() duration as float: 0.3s, 12s or 1m03s'''
+    m = re.fullmatch(r'(?:(\d+)m)?(\d+(?:\.\d+)?)s', field)
+    assert m, field
+    return int(m.group(1) or 0) * 60 + float(m.group(2))
+
+
 def canonical_hash(env):
     """Byte-stable digest of the data directory's DuckDB database"""
     from elixir import data_duckdb
@@ -257,17 +264,24 @@ def test_update_log_format(build_env, tmp_path):
     assert re.search(r'^\[\d\d:\d\d:\d\d\] walk done: 4 tags, \d+ blobs walked, \d+ new, \S+$',
                      result.stdout, re.M), result.stdout
 
-    # Tag line: timestamp, project tag (n/N), blobs, seconds, phases.
+    # Tag line: timestamp, project tag (n/N), blobs, total wall, the
+    # five phase fields (the classic grep-able group, in order), the
+    # extension fields (ids/vers/list/txn/chunks/fams/commit, each
+    # omitted at 0.0s), and other = total − parts, always printed.
     # The run ETA is exact from the first completed tag (the walk
     # counted the total new blobs): cumulative rate over blobs left
     assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj v5\.4 \(1/4\): '
-                     r'\d+ blobs, \S+ \(defs \S+ docs \S+ comps \S+ refs \S+ comps_docs \S+\)'
+                     r'\d+ blobs, total \S+ '
+                     r'\(defs \S+ docs \S+ comps \S+ refs \S+ comps_docs \S+(?: [a-z_]+ \S+)*\) '
+                     r'other \S+'
                      r' — \d+ blobs/s, \d+ blobs left, ETA \S+$',
                      result.stdout, re.M), result.stdout
 
-    # The last tag line ends after the phases: no ETA with nothing left
+    # The last tag line ends after other: no ETA with nothing left
     assert re.search(r'^\[\d\d:\d\d:\d\d\] testproj v5\.7 \(4/4\): '
-                     r'\d+ blobs, \S+ \(defs \S+ docs \S+ comps \S+ refs \S+ comps_docs \S+\)$',
+                     r'\d+ blobs, total \S+ '
+                     r'\(defs \S+ docs \S+ comps \S+ refs \S+ comps_docs \S+(?: [a-z_]+ \S+)*\) '
+                     r'other \S+$',
                      result.stdout, re.M), result.stdout
 
     # The machine line parses as JSON with every phase and the walk's
@@ -288,6 +302,28 @@ def test_update_log_format(build_env, tmp_path):
     assert summary['phases']['defs'] > 0
     assert summary['phases']['refs'] > 0
     assert isinstance(summary['lexer_errors'], int)
+    assert set(summary['tag_ops']) <= {'list', 'txn', 'chunks', 'fams', 'commit'}
+    assert isinstance(summary['other_s'], float)
+    assert summary['other_s'] >= 0
+
+    # The recap's arithmetic, on every tag line of the run: the sum of
+    # the printed parts plus other must equal the printed total, up
+    # to fmt_secs' rounding (every field rounds to 0.1s, so each
+    # contributes at most 0.05s of slack)
+    for line in result.stdout.splitlines():
+        m = re.fullmatch(r'\[\d\d:\d\d:\d\d\] testproj v5\.\d+ \(\d+/4\): '
+                         r'\d+ blobs, total (\S+) \((.*)\) other (\S+)'
+                         r'(?: —.*)?', line)
+        if not m:
+            continue
+        total, parts_s, other = secs(m.group(1)), m.group(2), secs(m.group(3))
+        toks = parts_s.split()
+        names, values = toks[::2], [secs(v) for v in toks[1::2]]
+        assert set(names) >= {'defs', 'docs', 'comps', 'refs', 'comps_docs'}
+        assert len(names) == len(values)
+        slack = 0.05 * (len(values) + 2) # rounding per field, total included
+        assert abs(sum(values) + other - total) <= slack + 1e-9, line
+        assert other >= 0
     assert isinstance(summary['ctags_notices'], int)
 
     # The walk's scratch artifacts are gone once the run succeeded
