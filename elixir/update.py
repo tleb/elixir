@@ -89,10 +89,27 @@
 # and one machine-parseable SUMMARY line (JSON) for post-hoc phase-time
 # analysis. ELIXIR_LOG_VERBOSE=1 additionally dumps the captured ctags
 # stderr and the first lexer-error samples before the summary.
+#
+# Observability: the run's first line is an identity banner (package
+# version, git rev from the image, interpreter, worker count, every
+# ELIXIR_* knob in effect) — on an incident, that one line answers
+# what code and knobs the container ran. Result consumption runs
+# through a STALL WATCHDOG (WorkerPool.imap_consume below): no result
+# within ELIXIR_STALL_TIMEOUT seconds logs one [stall] line with the
+# next item's identity, dumps every worker's stacks via SIGUSR1+
+# faulthandler, rebuilds the pool and resubmits the unconsumed items;
+# the third stall of a phase fails the run loudly. A worker wedged in
+# pathological input (the linux 2.1.25 cs89x0.c class) or a dead
+# worker whose task was lost can no longer stall the parent forever
+# with zero output.
 
+import faulthandler
+import importlib.metadata
 import json
 import multiprocessing
 import os
+import signal
+import sys
 import time
 from datetime import datetime
 
@@ -118,13 +135,34 @@ chunk_size = 256 # Max blobs per work unit; chunks() caps it further
 # All cores, always: the phases below are CPU-bound Python (lexing,
 # ctags-output parsing, compatible scanning) and the pool parallelizes
 # them for real; the historical thread-count argument is gone.
-num_threads = os.cpu_count() or 1
+# sched_getaffinity, not cpu_count: a container may pin the process to
+# fewer CPUs than exist, and cpu_count would oversubscribe the host.
+try:
+    num_threads = len(os.sched_getaffinity(0)) or 1
+except AttributeError: # no affinity API on this platform
+    num_threads = os.cpu_count() or 1
 
 log_verbose = os.environ.get('ELIXIR_LOG_VERBOSE') == '1'
 
 progress_min_interval = 5.0 # seconds between in-phase progress lines
 
 max_samples = 10 # lexer-error samples kept for the verbose dump
+
+default_stall_timeout = 600.0 # seconds without a result that make a
+                               # phase chunk a stall (see WorkerPool)
+
+def stall_timeout_s():
+    '''ELIXIR_STALL_TIMEOUT as seconds: the default when unset,
+    unparseable or non-positive, so the watchdog can never end up
+    armed with a zero or negative timeout'''
+    raw = os.environ.get('ELIXIR_STALL_TIMEOUT')
+    if raw is None:
+        return default_stall_timeout
+    try:
+        value = float(raw)
+    except ValueError:
+        return default_stall_timeout
+    return value if value > 0 else default_stall_timeout
 
 # The phases of one tag, in execution order; the SUMMARY line always
 # carries all of them, 0.0 for the ones a project does not run
@@ -216,6 +254,113 @@ class PhaseTimer:
         seconds = time.monotonic() - self.start
         self.times[self.name] = self.times.get(self.name, 0.0) + seconds
         self.totals[self.name] += seconds
+
+
+# ---- The worker pool and its stall watchdog ----
+
+def item_id(item):
+    '''The next unconsumed work item's identity for a [stall] line:
+    its repr, head-truncated — a phase item's repr leads with (phase,
+    tag_no, chunk_no, [(idx, file, blobhash), …]), so the blob the
+    chunk starts at is right at its head; a walk item's with its tag
+    range'''
+    return repr(item)[:200]
+
+def _worker_init():
+    '''Every worker's pool bootstrap: faulthandler on and SIGUSR1 wired
+    to dump all thread stacks, so the parent's stall handler can make
+    any worker report where it is — async-signal-safe, it fires even
+    from C code (a regex loop) holding the GIL, which a Python-level
+    dump would never reach'''
+    faulthandler.enable()
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
+
+stack_dump_wait = 5.0 # the pause after signaling: the workers write
+                      # their dumps to stderr in parallel, and a loaded
+                      # machine needs the margin before the pool dies
+
+class WorkerPool:
+    '''The run's worker pool, with a stall watchdog on result
+    consumption. imap consumption blocking longer than the timeout —
+    a worker spinning on pathological input, or a dead worker whose
+    in-flight task was lost — logs one [stall] line, dumps every
+    worker's stacks to stderr, rebuilds the pool and resubmits the
+    unconsumed items: the run recovers, or fails loudly after three
+    stalls, but never wedges silently. Results are consumed strictly
+    in submission order (imap order; resubmission restarts at the
+    first unconsumed item), so the watchdog cannot reorder anything.
+    Resubmission is safe for every phase: work units overwrite their
+    own scratch paths (chunk index and tag number travel in the
+    item), and the database is only written by the parent.
+    '''
+    def __init__(self, processes, timeout):
+        self.processes = processes
+        self.timeout = timeout
+        self.pool = None
+        self.start()
+
+    def start(self):
+        self.pool = multiprocessing.get_context('spawn').Pool(
+            self.processes, initializer=_worker_init)
+
+    def stop(self):
+        if self.pool is not None:
+            self.pool.terminate()
+            self.pool.join()
+            self.pool = None
+
+    def restart(self):
+        self.pool.terminate()
+        self.pool.join()
+        self.start()
+
+    def dump_worker_stacks(self):
+        '''One SIGUSR1 per worker: each dumps its own stacks from its
+        faulthandler handler, straight into stderr'''
+        # pool._pool is private but it is THE standard worker Process
+        # list; multiprocessing.Pool has no public accessor for it
+        for worker in self.pool._pool:
+            os.kill(worker.pid, signal.SIGUSR1)
+        time.sleep(stack_dump_wait)
+
+    def imap_consume(self, fn, items, ctx):
+        '''Yield (item, result) in submission order, waking the parent
+        on silence: every next-result wait runs under the stall
+        timeout (IMapIterator.next raises multiprocessing.TimeoutError
+        instead of blocking forever), and each result that arrives
+        rearms it — a phase whose results flow never sees a stall.
+        ctx names the consumption ("project tag phase") in [stall]
+        lines; a work unit's scratch overwrite makes resubmission from
+        the first unconsumed item idempotent'''
+        received = 0
+        stalls = 0
+        start = time.monotonic()
+        while received < len(items):
+            it = self.pool.imap(fn, items[received:])
+            stalled = False
+            while received < len(items):
+                try:
+                    result = it.next(self.timeout)
+                except multiprocessing.TimeoutError:
+                    stalled = True
+                    break
+                yield items[received], result
+                received += 1
+            if not stalled:
+                return
+            stalls += 1
+            line = ('[stall] %s: %d/%d chunks back after %s, retry %d/3, '
+                    'next item: %s' % (ctx, received, len(items),
+                                       fmt_secs(time.monotonic() - start),
+                                       stalls, item_id(items[received])))
+            log(line)
+            self.dump_worker_stacks()
+            if stalls >= 3:
+                raise UpdateError(
+                    '%s: stalled %d times, giving up — the worker stack '
+                    'dumps are above in stderr. Last stall: %s'
+                    % (ctx, stalls, line))
+            self.restart()
 
 
 # ---- Arrow scratch: how workers hand rows to the parent's SQL ----
@@ -605,6 +750,25 @@ def run(repo_dir, data_dir, project=None):
                           % (project, repo_dir))
 
     dts_comp_support = int(project in repo.DTS_COMP_SUPPORT)
+    stall_timeout = stall_timeout_s() # read once: the banner and the
+                                      # watchdog must agree
+
+    # The identity banner, the run's first line: on the next incident
+    # this alone answers what code and knobs the container ran — the
+    # package version, the git rev the image baked into ELIXIR_VERSION
+    # (absent in a local checkout), the interpreter, the worker count
+    # in effect and every ELIXIR_* knob, including the stall timeout
+    # resolved below
+    try:
+        pkg_version = importlib.metadata.version('elixir')
+    except importlib.metadata.PackageNotFoundError:
+        pkg_version = 'unknown (not installed)'
+    rev = os.environ.get('ELIXIR_VERSION')
+    knobs = ' '.join('%s=%s' % kv for kv in sorted(os.environ.items())
+                     if kv[0].startswith('ELIXIR_')) or 'none'
+    log('elixir %s%s, python %s, %d workers, stall timeout %gs, %s'
+        % (pkg_version, ' (rev %s)' % rev if rev else '',
+           sys.version.split()[0], num_threads, stall_timeout, knobs))
 
     # Run-wide aggregates, written by the parent as it consumes results
     run_phase_s = dict.fromkeys(phases, 0.0)
@@ -670,7 +834,7 @@ def run(repo_dir, data_dir, project=None):
         return result[1]
 
     run_start = time.monotonic()
-    pool = None
+    workers = None
     conn = None
     blob_lists = None
     walk_segments = [] # the walk's segment files, removed in finally
@@ -690,8 +854,10 @@ def run(repo_dir, data_dir, project=None):
         # the pool before the DuckDB connect is no longer required for
         # correctness (spawn would not inherit the connection anyway)
         # but kept: the workers' boot overlaps the connect and the
-        # walk instead of the first phase.
-        pool = multiprocessing.get_context('spawn').Pool(num_threads)
+        # walk instead of the first phase. WorkerPool wraps the pool
+        # with the stall watchdog; its initializer wires every worker
+        # for SIGUSR1 stack dumps.
+        workers = WorkerPool(num_threads, stall_timeout)
 
         db_path = os.path.join(data_dir, 'data.duckdb')
         # DuckDB's buffer budget for ingest. The connect_rw default
@@ -744,8 +910,8 @@ def run(repo_dir, data_dir, project=None):
             segments = []
             hashes_files = []
             walked_tags = 0
-            for item, result in zip(items, pool.imap(walk_tag_range, items),
-                                    strict=True):
+            for item, result in workers.imap_consume(
+                    walk_tag_range, items, project + ' walk'):
                 lists_path, hashes_path, slices, blobs = result
                 segments.append((lists_path, slices))
                 hashes_files.append(hashes_path)
@@ -1039,6 +1205,7 @@ def run(repo_dir, data_dir, project=None):
                                          sum(len(c) for c in chunks_list))
                     items = [(name, tag_no, ci, chunk, project, repo_dir, data_dir)
                              for ci, chunk in enumerate(chunks_list)]
+                    ctx = project + ' ' + tag.decode() + ' ' + name
                     pending = []
                     pending_bytes = 0
                     done_blobs = 0
@@ -1053,8 +1220,7 @@ def run(repo_dir, data_dir, project=None):
                             os.remove(path)
                         del pending[:]
                         pending_bytes = 0
-                    for item, result in zip(items, pool.imap(fn, items),
-                                            strict=True):
+                    for item, result in workers.imap_consume(fn, items, ctx):
                         pending.append(unpack(result))
                         pending_bytes += os.path.getsize(pending[-1])
                         done_blobs += len(item[3])
@@ -1170,9 +1336,8 @@ def run(repo_dir, data_dir, project=None):
             recluster_s = time.monotonic() - start
         violations = dd.check_invariants(conn)
     finally:
-        if pool is not None:
-            pool.terminate()
-            pool.join()
+        if workers is not None:
+            workers.stop()
         if conn is not None:
             conn.close()
         if blob_lists is not None:

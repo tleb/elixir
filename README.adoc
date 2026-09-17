@@ -127,9 +127,18 @@ Custom remotes (mirrors, vendor trees...) are added with
 under the data root: it does not bootstrap a project from a remote,
 that is what `index` is for.
 
-The updater uses every CPU on the system; there is no thread-count knob.
+The updater uses every CPU the process may run on (the affinity mask,
+not the host's core count); there is no thread-count knob.
 `$ELIXIR_DDB_MEM` overrides DuckDB's ingest memory budget (by default a
 quarter of the RAM, so the indexing pool keeps room beside it).
+
+Indexing is watched: when a work unit stays silent for
+`$ELIXIR_STALL_TIMEOUT` seconds (600 by default), the updater logs one
+`[stall]` line naming the next item, dumps every worker's stack, and
+resumes the work on a rebuilt pool; three stalls in one phase fail
+the update loudly instead of wedging silently. The run's first line
+is a banner with the version, interpreter, worker count and every
+`ELIXIR_*` setting in effect.
 
 Tags are indexed one at a time, the oldest first, in one transaction per
 tag, and `elixir index` runs an update after each fetch.
